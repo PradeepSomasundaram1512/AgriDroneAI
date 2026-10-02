@@ -56,4 +56,4 @@ def load_json(name, default, d=None):
 def save_json(name, obj, d=None):
     p = _p(name, d)
     p.parent.mkdir(parents=True, exist_ok=True)
-    p.write_text(json.dumps(obj, indent=1))
+    p.write_text(json.dumps(obj, separators=(",", ":")))   # compact: state is committed daily, keep diffs small

@@ -17,20 +17,20 @@
   },
   "no_fly_cells": [
     [
-      0,
-      0
+      10,
+      10
     ],
     [
-      0,
-      1
+      10,
+      11
     ],
     [
-      1,
-      0
+      11,
+      10
     ],
     [
-      1,
-      1
+      11,
+      11
     ]
   ],
   "thresholds": {
@@ -38,7 +38,8 @@
     "moisture_irrigate": 0.3,
     "pest_spray": 0.55,
     "psi_drift": 0.25,
-    "min_accuracy": 0.9
+    "min_accuracy": 0.9,
+    "min_recall": 0.85
   },
   "slo": {
     "uptime_pct": 99.0,

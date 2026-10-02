@@ -86,7 +86,7 @@ def test_interlock_and_policy_flag(monkeypatch):
 
 
 def test_nofly_and_geofence_blocked_before_connecting():
-    for t in ([((0, 0), "spray")], [((99, 1), "spray")]):
+    for t in ([((10, 10), "spray")], [((99, 1), "spray")]):
         with pytest.raises(PreflightError):
             asyncio.run(ex()[0].fly([mission(t)]))
     assert FakeLink.instances == []

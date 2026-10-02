@@ -1,16 +1,21 @@
 """Greedy priority-weighted, load-balancing mission planner (minimises the longest sortie, not total energy). One altitude layer per drone => separation by construction."""
+from . import model as M
 from .safety import Mission, mission_energy
 
 
 def find_targets(farm, model, thr):
     """Cells needing action, ranked by severity. Observation noise included (as in the field)."""
     out = []
-    for cell in farm.cells:
-        o = farm.observe(cell)
-        stressed = model.prob(o["ndvi"], o["moisture"], o["pest"]) > 0.5
-        if o["pest"] > thr["pest_spray"]:
+    obs = [farm.observe(c) for c in farm.cells]
+    med = M.median([o["ndvi"] for o in obs])
+    for o in obs:
+        cell = o["cell"]
+        stressed = model.prob(o["ndvi"] - med, o["moisture"], o["pest"]) > 0.5
+        # Fail-safe: plain agronomic thresholds ALWAYS act, whatever the model says (a stale model must not stop
+        # watering/spraying). The model only adds early detection just inside the thresholds.
+        if o["pest"] > thr["pest_spray"] or (stressed and o["pest"] > thr["pest_spray"] - 0.06):
             out.append((o["pest"] + 0.5, cell, "spray"))
-        elif stressed and o["moisture"] < thr["moisture_irrigate"]:
+        elif o["moisture"] < thr["moisture_irrigate"] or (stressed and o["moisture"] < thr["moisture_irrigate"] + 0.04):
             out.append(((thr["moisture_irrigate"] - o["moisture"]) + 0.3, cell, "irrigate"))
     out.sort(reverse=True)
     return out

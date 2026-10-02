@@ -8,7 +8,7 @@ from agridrone.sim import Farm
 
 def test_safety_blocks_nofly_and_battery():
     pol = load_policy()
-    m = safety.Mission(0, 30, [((0, 0), "spray"), ((5, 5), "irrigate")])
+    m = safety.Mission(0, 30, [((10, 10), "spray"), ((5, 5), "irrigate")])
     m.energy_wh = safety.mission_energy((0, 0), m.targets, pol["fleet"])
     assert any("no-fly" in v for v in safety.validate([m], pol))
     fixed, dropped = safety.repair([m], pol)
@@ -20,7 +20,8 @@ def test_altitude_separation():
     f = Farm.create(12, 1)
     for _ in range(10):
         f.step(rain=0)
-    ms = planner.plan(planner.find_targets(f, M.StressModel([-9, 0, -20, 8], 1), pol["thresholds"]), pol)
+    mdl = M.StressModel(); assert mdl.train(M.seed_rows())
+    ms = planner.plan(planner.find_targets(f, mdl, pol["thresholds"]), pol)
     ms, _ = safety.repair(ms, pol)
     assert not safety.validate(ms, pol)
 
@@ -61,7 +62,11 @@ def test_dashboard_renders(tmp_path):
     for _ in range(3):
         run_cycle(pol, tmp_path)
     out = render(tmp_path, pol)
-    assert "AgriDroneAI" in out and "<svg" in out
+    assert "AgriDroneAI" in out and "simulated farm" in out and "<canvas" in out
+    assert "/*__DATA__*/null" not in out          # data was injected
+    import json, re
+    data = json.loads(re.search(r"const D=(\{.*?\});\n", out, re.S).group(1))
+    assert data["size"] == 8 and data["kpi"]["cells"] == 64 and data["mission"]["missions"] is not None
 
 
 def test_planner_spreads_work_across_drones():
