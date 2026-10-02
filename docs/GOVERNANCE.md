@@ -25,3 +25,10 @@ The agent never edits `policy.json`. It may only nudge thresholds inside hard bo
 2. Silent system → watchdog opens an issue after 36h.
 3. Suspected bad behaviour → set kill switch, `git revert` the offending state commit, review `audit.jsonl`.
 4. Corrupt state → delete `state/farm.json` to re-seed; incident is logged, not fatal.
+
+## Operational safeguards added in 0.2.0
+- `config/policy.json` is validated on every load (battery reserve 10-60%, thresholds in range, no-fly cells inside the field and never the home pad, one hardware link per drone...). A bad edit fails fast with every problem listed.
+- The autopilot **verifies state before committing** (valid JSON, no NaN, correct patch count, sane ranges); a corrupt file blocks the commit and opens an incident.
+- Simulator upgrades **migrate state** (`state/archive-v1/`, `state/version.json`) rather than mixing physics.
+- Sensor faults are detected, repaired from neighbours, and reported (`sensor_faults` in the audit log; sensors flagged for maintenance appear on the dashboard).
+- Hardware modes plan a **single sortie**: a battery swap between flights needs a human at the aircraft.

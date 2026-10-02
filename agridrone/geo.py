@@ -1,5 +1,6 @@
 """Grid cell -> WGS84. Local equirectangular projection around the field's south-west corner;
 accurate to well under a metre at field scale."""
+
 import math
 
 M_PER_DEG_LAT = 111_320.0

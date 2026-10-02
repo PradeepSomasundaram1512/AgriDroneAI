@@ -1,10 +1,10 @@
 import argparse
 import sys
-from pathlib import Path
 
 from .agent import run_cycle
 from .config import REPORT_DIR
 from .reporting import build_report
+from datetime import UTC
 
 
 def main(argv=None):
@@ -19,6 +19,7 @@ def main(argv=None):
     g.add_argument("--poll", type=int, default=300)
     g.add_argument("--no-git", action="store_true")
     g.add_argument("--dry-run", action="store_true")
+    sub.add_parser("verify", help="check state files are healthy (autopilot runs this before committing)")
     sub.add_parser("dashboard", help="write docs/dashboard.html")
     r = sub.add_parser("report")
     r.add_argument("kind", choices=["weekly", "monthly"])
@@ -33,20 +34,30 @@ def main(argv=None):
         return 1 if bad else 0
     if a.cmd == "fly":
         from .ground_station import process_once
+
         print(process_once(human_approved=a.approve, dry_run=a.dry_run) or "nothing pending / awaiting approval")
         return 0
     if a.cmd == "ground-station":
         from .ground_station import daemon
+
         daemon(a.poll, sync=not a.no_git, dry_run=a.dry_run)
+    if a.cmd == "verify":
+        from .verify import verify
+
+        probs = verify()
+        print("state OK" if not probs else "STATE PROBLEMS:\n  - " + "\n  - ".join(probs))
+        return 1 if probs else 0
     if a.cmd == "dashboard":
         from .dashboard import write
+
         print(write())
         return 0
     text = build_report(a.kind)
     if a.write:
-        from datetime import datetime, timezone
+        from datetime import datetime
+
         REPORT_DIR.mkdir(exist_ok=True)
-        path = REPORT_DIR / f"{a.kind}-{datetime.now(timezone.utc):%Y-%m-%d}.md"
+        path = REPORT_DIR / f"{a.kind}-{datetime.now(UTC):%Y-%m-%d}.md"
         path.write_text(text)
         print(path)
     else:

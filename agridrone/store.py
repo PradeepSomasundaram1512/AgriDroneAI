@@ -1,5 +1,7 @@
 """File-backed state (git is the audit trail + durable store for the autopilot)."""
+
 import json
+import random
 from pathlib import Path
 
 from .config import STATE_DIR
@@ -10,27 +12,94 @@ def _p(name, d):
     return Path(d or STATE_DIR) / name
 
 
+def _rng(r):
+    st = r.getstate()
+    return [st[0], list(st[1]), st[2]]
+
+
+def _load_rng(d):
+    r = random.Random()
+    r.setstate((d[0], tuple(d[1]), d[2]))
+    return r
+
+
+STATE_VERSION = 2  # 2 = soil water balance / pest dynamics / sorties / sensor-quality model. 1 = original prototype physics.
+
+
+def migrate(d=None):
+    """Simulation state from an older model version must not be silently mixed with the new physics: archive it and
+    start clean. (Git history keeps everything too.) Returns the archive path if a migration happened, else None."""
+    import shutil
+
+    root = Path(d or STATE_DIR)
+    root.mkdir(parents=True, exist_ok=True)
+    v = root / "version.json"
+    cur = json.loads(v.read_text())["version"] if v.exists() else (1 if (root / "farm.json").exists() else STATE_VERSION)
+    if cur == STATE_VERSION:
+        if not v.exists():
+            v.write_text(json.dumps({"version": STATE_VERSION}))
+        return None
+    arch = root / f"archive-v{cur}"
+    arch.mkdir(exist_ok=True)
+    for f in root.iterdir():
+        if f.is_file() and f.name != "version.json" and f.name != ".gitkeep":
+            shutil.move(str(f), arch / f.name)
+    v.write_text(json.dumps({"version": STATE_VERSION}))
+    return arch
+
+
 def save_farm(f: Farm, d=None):
     p = _p("farm.json", d)
     p.parent.mkdir(parents=True, exist_ok=True)
-    data = {"size": f.size, "seed": f.seed, "day": f.day, "water": f.water_used, "chem": f.chem_used,
-            "rng": [f.rng.getstate()[0], list(f.rng.getstate()[1]), f.rng.getstate()[2]],
-            "cells": [[x, y, c.ndvi, c.moisture, c.pest, c.yield_potential] for (x, y), c in f.cells.items()]}
+    data = {
+        "size": f.size,
+        "seed": f.seed,
+        "day": f.day,
+        "water": f.water_used,
+        "chem": f.chem_used,
+        "rng": _rng(f.rng),
+        "obs_rng": _rng(f.obs_rng),
+        "fault_rng": _rng(f.fault_rng),
+        "start_doy": f.start_doy,
+        "faults": [[x, y, v["mode"], v["start"], v["bias"], v["frozen"]] for (x, y), v in f.faults.items()],
+        "cells": [
+            [
+                x,
+                y,
+                round(c.ndvi, 5),
+                round(c.moisture, 5),
+                round(c.pest, 5),
+                round(c.yield_potential, 5),
+                round(c.soil, 4),
+                round(c.host, 4),
+            ]
+            for (x, y), c in f.cells.items()
+        ],
+    }
     p.write_text(json.dumps(data))
 
 
-def load_farm(seed, size, d=None) -> Farm:
+def load_farm(seed, size, d=None, fault_rate=0.0, start_doy=120) -> Farm:
     p = _p("farm.json", d)
     if not p.exists():
-        return Farm.create(size, seed)
+        return Farm.create(size, seed, start_doy, fault_rate)
     data = json.loads(p.read_text())
-    f = Farm(size=data["size"], seed=data["seed"], day=data["day"], water_used=data["water"], chem_used=data["chem"])
-    import random
-    f.rng = random.Random()
-    v, internal, gauss = data["rng"]
-    f.rng.setstate((v, tuple(internal), gauss))
-    for x, y, n, m, pe, yp in data["cells"]:
-        f.cells[(x, y)] = Cell(n, m, pe, yp)
+    f = Farm(
+        size=data["size"],
+        seed=data["seed"],
+        day=data["day"],
+        water_used=data["water"],
+        chem_used=data["chem"],
+        start_doy=data.get("start_doy", 120),
+    )
+    f.rng, f.obs_rng = _load_rng(data["rng"]), (_load_rng(data["obs_rng"]) if "obs_rng" in data else random.Random(data["seed"] + 9001))
+    f.fault_rng = _load_rng(data["fault_rng"]) if "fault_rng" in data else random.Random(data["seed"] + 31337)
+    f.faults = {
+        (x, y): {"mode": m, "start": st, "bias": b, "frozen": tuple(fr) if fr else None} for x, y, m, st, b, fr in data.get("faults", [])
+    }
+    for row in data["cells"]:
+        x, y, n, m, pe, yp = row[:6]
+        f.cells[(x, y)] = Cell(n, m, pe, yp, row[6] if len(row) > 6 else 1.0, row[7] if len(row) > 7 else 1.0)
     return f
 
 
@@ -56,4 +125,4 @@ def load_json(name, default, d=None):
 def save_json(name, obj, d=None):
     p = _p(name, d)
     p.parent.mkdir(parents=True, exist_ok=True)
-    p.write_text(json.dumps(obj, separators=(",", ":")))   # compact: state is committed daily, keep diffs small
+    p.write_text(json.dumps(obj, separators=(",", ":")))  # compact: state is committed daily, keep diffs small

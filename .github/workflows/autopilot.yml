@@ -1,36 +1,44 @@
-# The system's heartbeat: one operating cycle (= one simulated day) per run, state committed to git
-# so every decision is auditable and recoverable via `git revert`.
+# The system's heartbeat: one operating cycle (= one simulated day) per run, state committed to git so every decision
+# is auditable and recoverable via `git revert`. State is verified BEFORE it is committed: a corrupt file must never
+# reach the repo, because the next scheduled run would load it.
 name: Autopilot
 on:
   schedule: [{cron: "0 6 * * *"}]
   workflow_dispatch:
 concurrency: {group: autopilot, cancel-in-progress: false}
 permissions: {contents: write, issues: write}
+env: {PYTHONPATH: "."}
 jobs:
   cycle:
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
-        with: {python-version: "3.13"}
-      - name: Run tests first (never operate on a broken build)
-        run: pip install pytest && PYTHONPATH=. pytest -q
+        with: {python-version: "3.13", cache: pip}
+      - name: Tests first (never operate on a broken build)
+        run: pip install pytest pytest-cov && AGRIDRONE_OFFLINE=1 pytest -q --cov
+      - name: Validate policy
+        run: python -c "from agridrone.config import load_policy; load_policy(); print('policy OK')"
       - name: Operating cycle
-        id: cycle
         env:
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}   # optional; advisor is off without it
         run: |
           pip install anthropic || true
-          PYTHONPATH=. python -m agridrone.cli cycle -n 1
-          PYTHONPATH=. python -m agridrone.cli dashboard
+          python -m agridrone.cli cycle -n 1
+          python -m agridrone.cli dashboard
+      - name: Verify state integrity (blocks the commit if anything is corrupt)
+        run: python -m agridrone.cli verify
       - name: Commit state + audit log
-        if: always()
         run: |
           git config user.name "agridrone-autopilot"
           git config user.email "autopilot@users.noreply.github.com"
-          git add state docs/dashboard.html && (git diff --cached --quiet || git commit -m "autopilot: cycle $(date -u +%F)")
+          git add state docs/dashboard.html
+          git diff --cached --quiet || git commit -m "autopilot: cycle $(date -u +%F)"
           git push || (git pull --rebase && git push)
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with: {name: dashboard, path: docs/dashboard.html, retention-days: 14}
       - name: Open incident issue on failure
         if: failure()
         env: {GH_TOKEN: "${{ github.token }}"}

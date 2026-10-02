@@ -1,0 +1,66 @@
+{
+ "days": 120,
+ "seeds": 6,
+ "patches": 576,
+ "strategies": [
+  {
+   "id": "none",
+   "name": "Do nothing",
+   "yield": 0.8792,
+   "yield_sd": 0.0643,
+   "water_mm": 0,
+   "sprays": 0.0
+  },
+  {
+   "id": "calendar",
+   "name": "Fixed schedule",
+   "yield": 1.0,
+   "yield_sd": 0.0,
+   "water_mm": 612,
+   "sprays": 8.0
+  },
+  {
+   "id": "thresholds",
+   "name": "AI agent, rules only",
+   "yield": 0.9967,
+   "yield_sd": 0.0008,
+   "water_mm": 122,
+   "sprays": 0.56
+  },
+  {
+   "id": "agent-1",
+   "name": "AI agent, 1 flight/day",
+   "yield": 0.9602,
+   "yield_sd": 0.0422,
+   "water_mm": 66,
+   "sprays": 0.69
+  },
+  {
+   "id": "agent-3",
+   "name": "AI agent, 3 flights/day",
+   "yield": 0.997,
+   "yield_sd": 0.0006,
+   "water_mm": 126,
+   "sprays": 0.62
+  }
+ ],
+ "ml_value": {
+  "mean": 0.0004,
+  "wins": "6/6"
+ },
+ "faults": {
+  "rate": 0.04,
+  "variants": [
+   {
+    "name": "quality filter OFF",
+    "yield": 0.9935,
+    "water_mm": 184
+   },
+   {
+    "name": "quality filter ON",
+    "yield": 0.9932,
+    "water_mm": 131
+   }
+  ]
+ }
+}

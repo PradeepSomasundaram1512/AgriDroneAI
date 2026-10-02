@@ -20,20 +20,23 @@ def test_altitude_separation():
     f = Farm.create(12, 1)
     for _ in range(10):
         f.step(rain=0)
-    mdl = M.StressModel(); assert mdl.train(M.seed_rows())
+    mdl = M.StressModel()
+    assert mdl.train(M.seed_rows())
     ms = planner.plan(planner.find_targets(f, mdl, pol["thresholds"]), pol)
     ms, _ = safety.repair(ms, pol)
     assert not safety.validate(ms, pol)
 
 
 def test_kill_switch_halts_actuation(tmp_path):
-    pol = load_policy(); pol["kill_switch"] = True
+    pol = load_policy()
+    pol["kill_switch"] = True
     rec = run_cycle(pol, tmp_path)
     assert rec["ok"] and rec["skipped"]
 
 
 def test_autopilot_runs_30_days_and_saves_resources(tmp_path):
-    pol = load_policy(); pol["field"]["size"] = 12
+    pol = load_policy()
+    pol["field"]["size"] = 12
     for _ in range(30):
         rec = run_cycle(pol, tmp_path)
         assert rec["ok"], rec
@@ -43,13 +46,17 @@ def test_autopilot_runs_30_days_and_saves_resources(tmp_path):
 
 
 def test_state_persists_and_resumes(tmp_path):
-    pol = load_policy(); pol["field"]["size"] = 8
-    run_cycle(pol, tmp_path); r2 = run_cycle(pol, tmp_path)
+    pol = load_policy()
+    pol["field"]["size"] = 8
+    run_cycle(pol, tmp_path)
+    r2 = run_cycle(pol, tmp_path)
     assert r2["day"] == 2
 
 
 def test_corrupt_state_is_incident_not_crash(tmp_path):
-    pol = load_policy(); pol["field"]["size"] = 8
+    pol = load_policy()
+    pol["field"]["size"] = 8
+    (tmp_path / "version.json").write_text('{"version": 2}')  # current-version state that is corrupt => incident, not migration
     (tmp_path / "farm.json").write_text("{broken")
     rec = run_cycle(pol, tmp_path)
     assert rec["ok"] is False
@@ -58,13 +65,16 @@ def test_corrupt_state_is_incident_not_crash(tmp_path):
 
 def test_dashboard_renders(tmp_path):
     from agridrone.dashboard import render
-    pol = load_policy(); pol["field"]["size"] = 8
+
+    pol = load_policy()
+    pol["field"]["size"] = 8
     for _ in range(3):
         run_cycle(pol, tmp_path)
     out = render(tmp_path, pol)
     assert "AgriDroneAI" in out and "simulated farm" in out and "<canvas" in out
-    assert "/*__DATA__*/null" not in out          # data was injected
-    import json, re
+    assert "/*__DATA__*/null" not in out  # data was injected
+    import re
+
     data = json.loads(re.search(r"const D=(\{.*?\});\n", out, re.S).group(1))
     assert data["size"] == 8 and data["kpi"]["cells"] == 64 and data["mission"]["missions"] is not None
 

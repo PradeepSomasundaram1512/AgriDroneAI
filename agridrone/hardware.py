@@ -7,9 +7,9 @@ Layers (so the safety-critical logic is testable without a drone):
   PayloadDriver   - hook that fires the sprayer/valve when a waypoint is reached. Default only logs;
                     wiring real actuation (servo/relay on the companion computer) is hardware-specific.
 Never imported by the cloud autopilot: only the ground station (docs/GROUND_STATION.md) uses it."""
+
 import asyncio
 import logging
-import math
 import os
 import re
 from dataclasses import dataclass, field
@@ -28,7 +28,7 @@ class PreflightError(Exception):
 @dataclass
 class FlightResult:
     drone: int
-    status: str            # completed | aborted | refused | dry_run
+    status: str  # completed | aborted | refused | dry_run
     completed: int = 0
     total: int = 0
     reason: str = ""
@@ -37,6 +37,7 @@ class FlightResult:
 
 class NullPayload:
     """Logs instead of actuating. Replace with a driver for your sprayer/valve."""
+
     def __init__(self):
         self.events = []
 
@@ -57,10 +58,12 @@ class MavsdkLink:
 
     async def connect(self, timeout=30):
         await self.sys.connect(system_address=self.address)
+
         async def wait():
             async for s in self.sys.core.connection_state():
                 if s.is_connected:
-                    return
+                    break
+
         await asyncio.wait_for(wait(), timeout)
 
     async def ready(self, timeout=60):
@@ -68,21 +71,26 @@ class MavsdkLink:
             async for h in self.sys.telemetry.health():
                 if h.is_global_position_ok and h.is_home_position_ok:
                     return True
+            return False
+
         try:
             return bool(await asyncio.wait_for(wait(), timeout))
-        except asyncio.TimeoutError:
+        except TimeoutError:
             return False
 
     async def battery_pct(self):
         async for b in self.sys.telemetry.battery():
             v = b.remaining_percent
             return v * 100 if v <= 1.0 else v  # MAVSDK versions differ: 0..1 vs 0..100
+        return None
 
     async def upload(self, waypoints, speed, dwell_s):
         MI = self._m.mission.MissionItem
         nan = float("nan")
-        items = [MI(lat, lon, alt, speed, False, nan, nan, MI.CameraAction.NONE, dwell_s, nan, 2.0, nan, nan,
-                    MI.VehicleAction.NONE) for lat, lon, alt in waypoints]
+        items = [
+            MI(lat, lon, alt, speed, False, nan, nan, MI.CameraAction.NONE, dwell_s, nan, 2.0, nan, nan, MI.VehicleAction.NONE)
+            for lat, lon, alt in waypoints
+        ]
         m = self.sys.mission
         await m.clear_mission()  # an autopilot that rebooted may still hold the previous sortie's mission/progress
         await m.set_return_to_launch_after_mission(True)
@@ -115,15 +123,18 @@ class MavsdkLink:
             if not st.is_connected:
                 await asyncio.sleep(grace_s)
                 return True
+        return False
 
     async def wait_airborne(self, timeout):
         async def wait():
             async for in_air in self.sys.telemetry.in_air():
                 if in_air:
                     return True
+            return False
+
         try:
             return bool(await asyncio.wait_for(wait(), timeout))
-        except asyncio.TimeoutError:
+        except TimeoutError:
             return False
 
     async def wait_landed(self, timeout):
@@ -131,9 +142,11 @@ class MavsdkLink:
             async for in_air in self.sys.telemetry.in_air():
                 if not in_air:
                     return True
+            return False
+
         try:
             return bool(await asyncio.wait_for(wait(), timeout))
-        except asyncio.TimeoutError:
+        except TimeoutError:
             return False
 
 
@@ -199,19 +212,28 @@ class FlightExecutor:
             if not await link.wait_landed(self.hw.get("land_wait_s", 300)):
                 res.status, res.reason = "aborted", (res.reason + "; did not confirm landing").lstrip("; ")
             return res
-        except asyncio.TimeoutError:
+        except TimeoutError:
             sent = await self._abort(link)
             return FlightResult(mission.drone, "aborted", 0, total, "timeout; " + ("RTL commanded" if sent else "RTL NOT sent"))
         except Exception as e:  # any surprise => fail safe
             sent = await self._abort(link)
-            return FlightResult(mission.drone, "aborted", 0, total, f"{type(e).__name__}: {str(e)[:80]}; " + ("RTL commanded" if sent else "RTL could NOT be sent; relying on autopilot failsafe"))
+            return FlightResult(
+                mission.drone,
+                "aborted",
+                0,
+                total,
+                f"{type(e).__name__}: {str(e)[:80]}; "
+                + ("RTL commanded" if sent else "RTL could NOT be sent; relying on autopilot failsafe"),
+            )
 
     async def _watched(self, link, mission, total, reserve):
         """Run the monitor while watching the vehicle link; on loss, try RTL and report honestly."""
         state = {"reached": 0}
         mon = asyncio.ensure_future(self._monitor(link, mission, total, reserve, state))
         guard = asyncio.ensure_future(self._battery_guard(link, mission, total, reserve, state))
-        lost = asyncio.ensure_future(link.connection_lost(self.hw.get("link_loss_grace_s", 3))) if hasattr(link, "connection_lost") else None
+        lost = (
+            asyncio.ensure_future(link.connection_lost(self.hw.get("link_loss_grace_s", 3))) if hasattr(link, "connection_lost") else None
+        )
         try:
             await asyncio.wait([t for t in (mon, guard, lost) if t], return_when=asyncio.FIRST_COMPLETED)
             if mon.done():
@@ -239,16 +261,27 @@ class FlightExecutor:
             await asyncio.sleep(poll)
             try:
                 pct = await asyncio.wait_for(link.battery_pct(), self.hw.get("telemetry_timeout_s", 6))
-            except asyncio.TimeoutError:
+            except TimeoutError:
                 sent = await self._abort(link)
                 how = "RTL commanded" if sent else "RTL could NOT be sent; relying on autopilot link-loss failsafe"
                 log.error("drone %s: TELEMETRY SILENT (link lost); %s", mission.drone, how)
                 return FlightResult(mission.drone, "aborted", state["reached"], total, f"link lost (telemetry silent); {how}")
             if pct is not None and pct < reserve:
                 sent = await self._abort(link)
-                log.error("drone %s: battery %.0f%% below reserve %s%%; %s", mission.drone, pct, reserve, "RTL commanded" if sent else "RTL NOT sent")
-                return FlightResult(mission.drone, "aborted", state["reached"], total,
-                                    f"battery {pct:.0f}% below reserve; " + ("RTL commanded" if sent else "RTL could NOT be sent"))
+                log.error(
+                    "drone %s: battery %.0f%% below reserve %s%%; %s",
+                    mission.drone,
+                    pct,
+                    reserve,
+                    "RTL commanded" if sent else "RTL NOT sent",
+                )
+                return FlightResult(
+                    mission.drone,
+                    "aborted",
+                    state["reached"],
+                    total,
+                    f"battery {pct:.0f}% below reserve; " + ("RTL commanded" if sent else "RTL could NOT be sent"),
+                )
 
     async def _monitor(self, link, mission, total, reserve, state=None):
         state = state if state is not None else {"reached": 0}
@@ -258,7 +291,8 @@ class FlightExecutor:
                 log.warning("drone %s: ignoring stale progress %s/%s (expected %s waypoints)", mission.drone, cur, tot, total)
                 continue
             while reached < min(cur, total):  # waypoint `reached` was just completed
-                await self.payload.trigger(*reversed(mission.targets[reached]))
+                if mission.targets[reached][1] != "via":  # detour waypoints do not trigger the sprayer/valve
+                    await self.payload.trigger(*reversed(mission.targets[reached]))
                 reached += 1
                 state["reached"] = reached
             pct = await link.battery_pct()
@@ -268,7 +302,8 @@ class FlightExecutor:
             if cur >= tot:
                 break
         while reached < total:
-            await self.payload.trigger(*reversed(mission.targets[reached]))
+            if mission.targets[reached][1] != "via":
+                await self.payload.trigger(*reversed(mission.targets[reached]))
             reached += 1
         return FlightResult(mission.drone, "completed", reached, total)
 

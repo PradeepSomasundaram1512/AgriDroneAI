@@ -15,7 +15,8 @@ def labelled(n=400, seed=3, noise=0.02):
 
 def test_tree_learns_the_or_rule_a_linear_model_cannot():
     train, test = labelled(500, 1), labelled(300, 2)
-    mdl = M.StressModel(); assert mdl.train(train)
+    mdl = M.StressModel()
+    assert mdl.train(train)
     s = mdl.score(test)
     assert s["bal"] > 0.9 and s["recall"] > 0.9
 
@@ -27,14 +28,16 @@ def test_one_class_data_is_refused_not_learned():
 
 def test_rare_positives_are_not_ignored():
     rows = [r for r in labelled(900, 4) if not r[3]][:300] + [r for r in labelled(900, 5) if r[3]][:15]
-    mdl = M.StressModel(); mdl.train(rows)
-    assert mdl.score(labelled(400, 6))["recall"] > 0.8   # class weighting: 15 positives vs 300 negatives still learned
+    mdl = M.StressModel()
+    mdl.train(rows)
+    assert mdl.score(labelled(400, 6))["recall"] > 0.8  # class weighting: 15 positives vs 300 negatives still learned
 
 
 def test_planner_waters_dry_cells_even_if_model_is_useless():
-    pol = load_policy(); f = Farm.create(8, 1)
+    pol = load_policy()
+    f = Farm.create(8, 1)
     for c in f.cells.values():
         c.moisture, c.pest = 0.05, 0.0
-    dead = M.StressModel({"p": 0.0}, 1)          # model that never flags anything
+    dead = M.StressModel({"p": 0.0}, 1)  # model that never flags anything
     t = planner.find_targets(f, dead, pol["thresholds"])
     assert len(t) == len(f.cells) and all(a == "irrigate" for _, _, a in t)

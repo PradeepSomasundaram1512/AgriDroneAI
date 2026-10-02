@@ -13,7 +13,8 @@
     "wh_per_cell_move": 0.8,
     "wh_per_cell_action": 1.5,
     "min_reserve_pct": 25,
-    "min_separation_m": 15
+    "min_separation_m": 15,
+    "sorties_per_day": 3
   },
   "no_fly_cells": [
     [
@@ -36,7 +37,7 @@
   "thresholds": {
     "ndvi_stress": 0.45,
     "moisture_irrigate": 0.3,
-    "pest_spray": 0.55,
+    "pest_spray": 0.45,
     "psi_drift": 0.25,
     "min_accuracy": 0.9,
     "min_recall": 0.85
@@ -61,5 +62,13 @@
     "dwell_s": 4,
     "max_flight_s": 1200,
     "max_queue_age_h": 12
-  }
+  },
+  "weather": {
+    "source": "synthetic",
+    "lat": 42.03,
+    "lon": -93.62,
+    "start_doy": 120,
+    "_note": "synthetic = seasonal generator (default, season starts at deployment). open-meteo = real data for the lat/lon; use it when day 1 is a real planting date."
+  },
+  "model_enabled": true
 }

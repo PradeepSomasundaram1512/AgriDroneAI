@@ -1,48 +1,74 @@
-import asyncio, copy, pytest
+import asyncio
+import pytest
 from agridrone import store
 from agridrone.agent import run_cycle
 from agridrone.config import load_policy
 from agridrone.geo import cell_to_latlon
-from agridrone.ground_station import process_once, pending
+from agridrone.ground_station import process_once
 from agridrone.hardware import FlightExecutor, NullPayload, PreflightError
 from agridrone.safety import Mission
 
 
 class FakeLink:
     instances = []
+
     def __init__(self, addr, battery=90.0, ready=True, drain=0.0, fail=None, hang=False):
         self.addr, self.bat, self._ready, self.drain, self.fail, self.hang = addr, battery, ready, drain, fail, hang
         self.rtl_called, self.uploaded, self.started = False, None, False
         FakeLink.instances.append(self)
-    async def connect(self): pass
-    async def ready(self): return self._ready
-    async def battery_pct(self): return self.bat
+
+    async def connect(self):
+        pass
+
+    async def ready(self):
+        return self._ready
+
+    async def battery_pct(self):
+        return self.bat
+
     async def upload(self, wps, speed, dwell):
-        if self.fail: raise RuntimeError(self.fail)
+        if self.fail:
+            raise RuntimeError(self.fail)
         self.uploaded = wps
-    async def start(self): self.started = True
+
+    async def start(self):
+        self.started = True
+
     async def progress(self):
         n = len(self.uploaded)
         if getattr(self, "stale", False):
             yield 7, 7  # stale event replayed from a previous mission
         for i in range(1, n + 1):
-            if self.hang: await asyncio.sleep(10)
+            if self.hang:
+                await asyncio.sleep(10)
             self.bat -= self.drain
             yield i, n
+
     async def rtl(self):
-        if getattr(self, 'rtl_fails', False): raise ConnectionError('link down')
+        if getattr(self, "rtl_fails", False):
+            raise ConnectionError("link down")
         self.rtl_called = True
-    async def ensure_failsafe(self): return not getattr(self, 'bad_failsafe', False)
+
+    async def ensure_failsafe(self):
+        return not getattr(self, "bad_failsafe", False)
+
     async def connection_lost(self, grace):
-        if getattr(self, 'lose_link', False):
-            await asyncio.sleep(0.05); return True
+        if getattr(self, "lose_link", False):
+            await asyncio.sleep(0.05)
+            return True
         await asyncio.sleep(3600)
-    async def wait_airborne(self, timeout): return not getattr(self, 'no_takeoff', False)
-    async def wait_landed(self, timeout): return not getattr(self, 'stuck', False)
+
+    async def wait_airborne(self, timeout):
+        return not getattr(self, "no_takeoff", False)
+
+    async def wait_landed(self, timeout):
+        return not getattr(self, "stuck", False)
 
 
 def pol(**hw):
-    p = load_policy(); p["hardware"].update(enabled=True, **hw); return p
+    p = load_policy()
+    p["hardware"].update(enabled=True, **hw)
+    return p
 
 
 def mission(targets=(((5, 5), "irrigate"), ((6, 5), "spray")), drone=0, alt=30):
@@ -51,7 +77,8 @@ def mission(targets=(((5, 5), "irrigate"), ((6, 5), "spray")), drone=0, alt=30):
 
 @pytest.fixture(autouse=True)
 def armed(monkeypatch):
-    FakeLink.instances.clear(); monkeypatch.setenv("AGRIDRONE_ARMED", "1")
+    FakeLink.instances.clear()
+    monkeypatch.setenv("AGRIDRONE_ARMED", "1")
 
 
 def ex(p=None, **kw):
@@ -119,7 +146,9 @@ def test_dry_run_never_connects():
 
 
 def test_agent_queues_and_ground_station_flies(tmp_path):
-    p = pol(); p["autonomy_level"] = "autonomous"; p["field"]["size"] = 16
+    p = pol()
+    p["autonomy_level"] = "autonomous"
+    p["field"]["size"] = 16
     for _ in range(25):
         run_cycle(p, tmp_path)
     q = store.read_jsonl("queue.jsonl", tmp_path)
@@ -133,7 +162,9 @@ def test_agent_queues_and_ground_station_flies(tmp_path):
 
 
 def test_supervised_waits_for_human_and_expiry(tmp_path):
-    p = pol(); p["autonomy_level"] = "supervised"; p["field"]["size"] = 16
+    p = pol()
+    p["autonomy_level"] = "supervised"
+    p["field"]["size"] = 16
     for _ in range(25):
         run_cycle(p, tmp_path)
     q = store.read_jsonl("queue.jsonl", tmp_path)[-1]
@@ -144,7 +175,9 @@ def test_supervised_waits_for_human_and_expiry(tmp_path):
 
 
 def test_stale_mission_expires_and_kill_switch(tmp_path):
-    p = pol(); p["autonomy_level"] = "autonomous"; p["field"]["size"] = 16
+    p = pol()
+    p["autonomy_level"] = "autonomous"
+    p["field"]["size"] = 16
     for _ in range(25):
         run_cycle(p, tmp_path)
     q = store.read_jsonl("queue.jsonl", tmp_path)[-1]
@@ -158,6 +191,7 @@ def test_stale_mission_expires_and_kill_switch(tmp_path):
 def test_unconfirmed_landing_is_not_completed():
     class Stuck(FakeLink):
         stuck = True
+
     e = FlightExecutor(pol(), link_factory=lambda a: Stuck(a), payload=NullPayload())
     r = asyncio.run(e.fly([mission()]))[0]
     assert r.status == "aborted" and "landing" in r.reason
@@ -166,6 +200,7 @@ def test_unconfirmed_landing_is_not_completed():
 def test_no_takeoff_is_never_completed_and_payload_silent():
     class Grounded(FakeLink):
         no_takeoff = True
+
     pay = NullPayload()
     r = asyncio.run(FlightExecutor(pol(), link_factory=lambda a: Grounded(a), payload=pay).fly([mission()]))[0]
     assert r.status == "aborted" and pay.events == [] and FakeLink.instances[-1].rtl_called
@@ -174,6 +209,7 @@ def test_no_takeoff_is_never_completed_and_payload_silent():
 def test_stale_progress_event_is_ignored():
     class Stale(FakeLink):
         stale = True
+
     pay = NullPayload()
     r = asyncio.run(FlightExecutor(pol(), link_factory=lambda a: Stale(a), payload=pay).fly([mission()]))[0]
     assert r.status == "completed" and len(pay.events) == 2
@@ -182,6 +218,7 @@ def test_stale_progress_event_is_ignored():
 def test_refuses_if_autopilot_failsafe_cannot_be_verified():
     class Bad(FakeLink):
         bad_failsafe = True
+
     r = asyncio.run(FlightExecutor(pol(), link_factory=lambda a: Bad(a), payload=NullPayload()).fly([mission()]))[0]
     assert r.status == "refused" and "failsafe" in r.reason and not FakeLink.instances[-1].started
 
@@ -189,12 +226,17 @@ def test_refuses_if_autopilot_failsafe_cannot_be_verified():
 def test_link_loss_midflight_aborts_and_reports_rtl_state():
     class Slow(FakeLink):
         lose_link = True
+
         async def progress(self):
-            await asyncio.sleep(1); yield 1, 2
+            await asyncio.sleep(1)
+            yield 1, 2
+
     r = asyncio.run(FlightExecutor(pol(), link_factory=lambda a: Slow(a), payload=NullPayload()).fly([mission()]))[0]
     assert r.status == "aborted" and "link lost" in r.reason and "RTL commanded" in r.reason
+
     class SlowDead(Slow):
         rtl_fails = True
+
     r = asyncio.run(FlightExecutor(pol(), link_factory=lambda a: SlowDead(a), payload=NullPayload()).fly([mission()]))[0]
     assert "could NOT be sent" in r.reason and "failsafe" in r.reason
 
@@ -202,12 +244,19 @@ def test_link_loss_midflight_aborts_and_reports_rtl_state():
 def test_battery_guard_fires_even_when_no_progress_events_arrive():
     class Silent(FakeLink):
         async def battery_pct(self):
-            self.bat -= 15; return self.bat      # drains on every poll
+            self.bat -= 15
+            return self.bat  # drains on every poll
+
         async def progress(self):
-            await asyncio.sleep(5); yield 2, 2   # no waypoint events for a long time
+            await asyncio.sleep(5)
+            yield 2, 2  # no waypoint events for a long time
+
     link = {}
+
     def f(a):
-        link["l"] = Silent(a, battery=80); return link["l"]
+        link["l"] = Silent(a, battery=80)
+        return link["l"]
+
     e = FlightExecutor(pol(battery_poll_s=0.02), link_factory=f, payload=NullPayload())
     r = asyncio.run(e.fly([mission()]))[0]
     assert r.status == "aborted" and "below reserve" in r.reason and link["l"].rtl_called
@@ -217,13 +266,19 @@ def test_dead_link_hangs_are_bounded_telemetry_silence_aborts():
     class Dead(FakeLink):
         async def battery_pct(self):
             if getattr(self, "dead", False):
-                await asyncio.sleep(3600)        # gRPC to a dead server never returns
+                await asyncio.sleep(3600)  # gRPC to a dead server never returns
             return 90.0
+
         async def progress(self):
             self.dead = True
-            await asyncio.sleep(3600); yield 1, 2
+            await asyncio.sleep(3600)
+            yield 1, 2
+
         async def rtl(self):
             await asyncio.sleep(3600)
-    e = FlightExecutor(pol(battery_poll_s=0.02, telemetry_timeout_s=0.1, rtl_timeout_s=0.1), link_factory=lambda a: Dead(a), payload=NullPayload())
+
+    e = FlightExecutor(
+        pol(battery_poll_s=0.02, telemetry_timeout_s=0.1, rtl_timeout_s=0.1), link_factory=lambda a: Dead(a), payload=NullPayload()
+    )
     r = asyncio.run(asyncio.wait_for(e.fly([mission()]), 5))[0]
     assert r.status == "aborted" and "link lost" in r.reason and "could NOT be sent" in r.reason

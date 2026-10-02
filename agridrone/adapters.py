@@ -12,6 +12,8 @@ class SimAdapter:
         done = 0
         for m in missions:
             for cell, action in m.targets:
+                if action == "via":  # detour waypoint around a no-fly zone: nothing to treat
+                    continue
                 self.farm.apply(tuple(cell), action)
                 done += 1
         return done

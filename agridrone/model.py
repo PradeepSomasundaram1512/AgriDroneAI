@@ -4,6 +4,7 @@ Swap for a PyTorch/ONNX model by keeping the prob/train/score/to_dict/from_dict 
 Why a tree: stress is "too dry OR too infested", an OR of two thresholds that a single linear/logistic boundary
 cannot represent (it missed whole stress events). Why class weights: stressed cells are rare most days, and an
 unweighted model scores 95%+ accuracy by never flagging anything."""
+
 import math
 import random
 
@@ -32,7 +33,7 @@ def seed_rows(n=160, seed=11):
     NOTE: simulator labels come from the same rule, so seed quality is optimistic vs. real agronomist labels."""
     r = random.Random(seed)
     rows = []
-    for i in range(n):
+    for _ in range(n):
         m, p = r.uniform(0.05, 0.55), r.uniform(0.0, 0.9)
         rows.append((r.gauss(0, 0.06), m + r.gauss(0, 0.02), p + r.gauss(0, 0.02), rule_label(m, p)))
     return rows
@@ -56,19 +57,25 @@ def _build(rows, wpos, wneg, depth, max_depth, min_leaf, min_gain=0.02, root_imp
         vals = sorted({r[f] for r in rows})
         cands = [(vals[i] + vals[i + 1]) / 2 for i in range(0, len(vals) - 1, max(1, len(vals) // 24))]
         for t in cands:
-            lp = sum(wpos for r in rows if r[f] <= t and r[3]); ln = sum(wneg for r in rows if r[f] <= t and not r[3])
+            lp = sum(wpos for r in rows if r[f] <= t and r[3])
+            ln = sum(wneg for r in rows if r[f] <= t and not r[3])
             nl = sum(1 for r in rows if r[f] <= t)
             if nl < min_leaf or len(rows) - nl < min_leaf:
                 continue
             score = _gini(lp, ln) * (lp + ln) + _gini(wp - lp, wn - ln) * (wp + wn - lp - ln)
             if best is None or score < best[0]:
                 best = (score, f, t)
-    if best is None or base - best[0] < min_gain * root_imp:   # split must clearly help, else it is fitting noise/shortcuts
+    if best is None or base - best[0] < min_gain * root_imp:  # split must clearly help, else it is fitting noise/shortcuts
         return leaf
     _, f, t = best
-    left = [r for r in rows if r[f] <= t]; right = [r for r in rows if r[f] > t]
-    return {"f": f, "t": t, "l": _build(left, wpos, wneg, depth + 1, max_depth, min_leaf, min_gain, root_imp),
-            "r": _build(right, wpos, wneg, depth + 1, max_depth, min_leaf, min_gain, root_imp)}
+    left = [r for r in rows if r[f] <= t]
+    right = [r for r in rows if r[f] > t]
+    return {
+        "f": f,
+        "t": t,
+        "l": _build(left, wpos, wneg, depth + 1, max_depth, min_leaf, min_gain, root_imp),
+        "r": _build(right, wpos, wneg, depth + 1, max_depth, min_leaf, min_gain, root_imp),
+    }
 
 
 class StressModel:
@@ -86,7 +93,8 @@ class StressModel:
     def train(self, rows, max_depth=3, min_leaf=6):
         """rows: [(ndvi, moisture, pest, label)]. Class-balanced: each class gets equal total weight."""
         rows = [tuple(r) for r in rows]
-        npos = sum(1 for r in rows if r[3]); nneg = len(rows) - npos
+        npos = sum(1 for r in rows if r[3])
+        nneg = len(rows) - npos
         if npos == 0 or nneg == 0:
             return False  # a one-class model is useless: refuse rather than learn "everything is fine"
         self.tree = _build(rows, 0.5 / npos, 0.5 / nneg, 0, max_depth, min_leaf)
@@ -98,7 +106,10 @@ class StressModel:
         tp = fn = tn = fp = 0
         for n, m, p, y in rows:
             pred = self.prob(n, m, p) > 0.5
-            tp += pred and y; fn += (not pred) and y; tn += (not pred) and not y; fp += pred and not y
+            tp += pred and y
+            fn += (not pred) and y
+            tn += (not pred) and not y
+            fp += pred and not y
         rec = tp / (tp + fn) if tp + fn else None
         spec = tn / (tn + fp) if tn + fp else None
         bal = (rec + spec) / 2 if rec is not None and spec is not None else None
@@ -122,10 +133,12 @@ def psi(ref, cur, bins=10):
     lo, hi = min(ref + cur), max(ref + cur)
     if hi == lo:
         return 0.0
+
     def hist(v):
         h = [0] * bins
         for x in v:
             h[min(bins - 1, int((x - lo) / (hi - lo) * bins))] += 1
         return [(c + 0.5) / (len(v) + 0.5 * bins) for c in h]
+
     a, b = hist(ref), hist(cur)
     return sum((y - x) * math.log(y / x) for x, y in zip(a, b))

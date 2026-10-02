@@ -1,21 +1,65 @@
 name: CI
-on: [push, pull_request]
+on:
+  push:
+  pull_request:
 permissions: {contents: read}
+concurrency: {group: "ci-${{ github.ref }}", cancel-in-progress: true}
+env: {AGRIDRONE_OFFLINE: "1", PYTHONPATH: "."}
+
 jobs:
-  test:
+  lint:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
-        with: {python-version: "3.13"}
-      - run: pip install pytest
-      - run: PYTHONPATH=. pytest -q
+        with: {python-version: "3.13", cache: pip}
+      - run: pip install ruff
+      - run: ruff check agridrone tests scripts
+      - run: ruff format --check agridrone tests scripts
+
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix: {python: ["3.11", "3.12", "3.13"]}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: {python-version: "${{ matrix.python }}", cache: pip}
+      - run: pip install pytest pytest-cov
+      - name: Tests with coverage gate (fails under 85%)
+        run: pytest -q --cov --cov-report=term-missing
+      - name: Policy validates and shipped state is healthy
+        run: python -c "from agridrone.config import load_policy; load_policy()" && python -m agridrone.cli verify
       - name: Smoke-run 10 autonomous cycles on a scratch state dir
         run: |
-          PYTHONPATH=. python - <<'PY'
+          python - <<'PY'
           import tempfile
           from agridrone.agent import run_cycle
           from agridrone.config import load_policy
           p = load_policy(); d = tempfile.mkdtemp()
           assert all(run_cycle(p, d)["ok"] for _ in range(10))
           PY
+
+  security:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: {python-version: "3.13", cache: pip}
+      - run: python -m pip install --upgrade pip && pip install bandit pip-audit
+      - name: Static security scan (medium+ severity fails the build)
+        run: bandit -q -r agridrone -ll
+      - name: Dependency audit (runtime + optional extras)
+        run: |
+          pip install ".[llm,hardware]"
+          pip-audit --skip-editable
+
+  docker:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build image and run a cycle inside it
+        run: |
+          docker build -t agridrone:ci .
+          docker run --rm -e AGRIDRONE_OFFLINE=1 agridrone:ci verify

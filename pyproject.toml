@@ -1,6 +1,6 @@
 [project]
 name = "agridrone"
-version = "0.1.0"
+version = "0.2.0"
 description = "AgriDroneAI: autonomous precision-agriculture drone network (simulation-first)"
 requires-python = ">=3.11"
 dependencies = []
@@ -8,7 +8,7 @@ dependencies = []
 [project.optional-dependencies]
 llm = ["anthropic>=0.40"]
 hardware = ["mavsdk-grpc>=3"]
-dev = ["pytest>=8"]
+dev = ["pytest>=8", "pytest-cov", "ruff", "bandit", "pip-audit"]
 
 [project.scripts]
 agridrone = "agridrone.cli:main"
@@ -18,3 +18,25 @@ packages = ["agridrone"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+
+[tool.ruff]
+line-length = 140
+target-version = "py311"
+extend-exclude = ["scripts/sitl_*.py"]
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "B", "UP", "S", "C4", "SIM", "RET"]
+ignore = ["S101", "S311", "S603", "S607", "E701", "E702", "E741", "SIM108", "RET504", "S310", "B905"]
+
+[tool.ruff.lint.per-file-ignores]
+"agridrone/dashboard.py" = ["E501"]   # embedded HTML/CSS/JS template
+"tests/*" = ["S", "B", "SIM", "RET", "E731", "C4"]
+"scripts/*" = ["E501", "S", "E402", "E731", "SIM", "RET", "B", "C4"]
+
+[tool.coverage.run]
+source = ["agridrone"]
+omit = ["agridrone/hardware.py", "agridrone/advisor.py", "agridrone/adapters.py"]
+
+[tool.coverage.report]
+fail_under = 85
+show_missing = true

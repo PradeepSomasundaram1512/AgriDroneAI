@@ -1,6 +1,7 @@
 """Ground station: runs at the farm (Raspberry Pi / laptop / self-hosted runner), the only place that can reach the drones.
 Loop: git pull -> pick newest unflown queued mission -> re-validate against policy -> fly -> log -> git push.
 Cloud autopilot plans; ground station executes. The cloud can never actuate hardware directly."""
+
 import asyncio
 import subprocess
 import time
@@ -11,7 +12,10 @@ from .hardware import FlightExecutor, PreflightError
 
 
 def to_missions(rec):
-    return [safety.Mission(m["drone"], m["alt"], [(tuple(c), a) for c, a in m["targets"]], m["energy_wh"]) for m in rec["missions"]]
+    return [
+        safety.Mission(m["drone"], m["alt"], [(tuple(c), a) for c, a in m["targets"]], m["energy_wh"], m.get("sortie", 0))
+        for m in rec["missions"]
+    ]
 
 
 def pending(state_dir=None, now=None, max_age_h=12):
@@ -35,7 +39,10 @@ def process_once(policy=None, state_dir=None, executor=None, human_approved=None
     policy = policy or load_policy()
     hw = policy["hardware"]
     rec, skipped = pending(state_dir, now, hw.get("max_queue_age_h", 12))
-    log = lambda r: store.append_jsonl("flights.jsonl", r, state_dir)
+
+    def log(r):
+        store.append_jsonl("flights.jsonl", r, state_dir)
+
     for qid, why in skipped:
         log({"id": qid, "status": why, "ts": now or time.time()})
     if rec is None:
@@ -48,9 +55,14 @@ def process_once(policy=None, state_dir=None, executor=None, human_approved=None
         ex = executor or FlightExecutor(policy)
         try:
             results = asyncio.run(ex.fly(to_missions(rec), dry_run=dry_run))
-            out = {"id": rec["id"], "status": "dry_run" if dry_run else ("completed" if all(r.status == "completed" for r in results) else "partial"),
-                   "drones": [{"drone": r.drone, "status": r.status, "done": r.completed, "total": r.total, "reason": r.reason} for r in results],
-                   "ts": time.time()}
+            out = {
+                "id": rec["id"],
+                "status": "dry_run" if dry_run else ("completed" if all(r.status == "completed" for r in results) else "partial"),
+                "drones": [
+                    {"drone": r.drone, "status": r.status, "done": r.completed, "total": r.total, "reason": r.reason} for r in results
+                ],
+                "ts": time.time(),
+            }
         except PreflightError as e:
             out = {"id": rec["id"], "status": "refused", "reason": str(e), "ts": time.time()}
     log(out)
@@ -72,7 +84,8 @@ def daemon(poll_s=300, sync=True, dry_run=False):
                 _git("add", "state/flights.jsonl")
                 _git("commit", "-m", f"ground-station: flight {out['id']} {out['status']}")
                 if _git("push").returncode:
-                    _git("pull", "--rebase", "--autostash"); _git("push")
+                    _git("pull", "--rebase", "--autostash")
+                    _git("push")
         except Exception as e:
             print("ground-station error:", repr(e), flush=True)
         time.sleep(poll_s)
