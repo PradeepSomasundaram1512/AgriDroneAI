@@ -60,7 +60,7 @@ def agent(seed, days, size, sorties, model=True, fault_rate=0.0, quality=True, p
     pol["field"]["sensor_fault_rate"], pol["quality_filter"] = fault_rate, quality
     pol["field"]["physics"] = physics
     for sect, kv in (overrides or {}).items():
-        pol[sect].update(kv)
+        pol.setdefault(sect, {}).update(kv)
     d = tempfile.mkdtemp()
     t = time.time()
     ok, hours = True, 0.0
@@ -105,6 +105,7 @@ def main(days=120, seeds=(1, 2, 3, 4, 5, 6), size=24):
     names = {
         "none": "Do nothing",
         "calendar": "Fixed schedule",
+        "triggered": "Smart farmer (sensor triggers, no drones)",
         "thresholds": "AI agent, rules only",
         "agent-1": "AI agent, 1 flight/day",
         "agent-3": "AI agent, 3 flights/day",
@@ -133,8 +134,12 @@ def faults(days=120, seeds=(1, 2, 3, 4), size=24, rate=0.04):
     out = {"rate": rate, "variants": []}
     print(f"\nsensor faults: {int(rate * 100)}% of sensors fail (dead / stuck / biased / spiking) at random times\n")
     print(f"{'agent-3':22s} {'yield':>14s} {'water mm/patch':>15s} {'sprays/patch':>13s}")
-    for label, q in (("quality filter OFF", False), ("quality filter ON", True)):
-        v = [agent(s, days, size, 3, fault_rate=rate, quality=q) for s in seeds]
+    for label, q, ov in (
+        ("quality filter OFF", False, None),
+        ("quality filter ON", True, None),
+        ("ON + satellite cross-check", True, {"quality": {"satellite_check": True}}),
+    ):
+        v = [agent(s, days, size, 3, fault_rate=rate, quality=q, overrides=ov) for s in seeds]
         y = [r[0] for r in v]
         print(
             f"{label:22s} {st.mean(y):.3f} ± {st.pstdev(y):.3f}   {st.mean(r[1] for r in v) / (size * size):12.0f}   {st.mean(r[2] for r in v) / (size * size):11.2f}",

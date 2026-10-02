@@ -30,7 +30,7 @@ jobs:
       - name: Tests with coverage gate (fails under 85%)
         run: pytest -q --cov --cov-report=term-missing
       - name: Policy validates and shipped state is healthy
-        run: python -c "from agridrone.config import load_policy; load_policy()" && python -m agridrone.cli verify
+        run: python -c "from agridrone.config import load_policy; load_policy()" && python -m agridrone.cli verify && python -m agridrone.cli docs-sync --check
       - name: Smoke-run 10 autonomous cycles on a scratch state dir
         run: |
           python - <<'PY'

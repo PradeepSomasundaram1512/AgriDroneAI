@@ -19,6 +19,9 @@ DEFAULTS = {
 }
 
 
+NON_AI = ("none", "calendar", "triggered")  # no drones: calendar irrigation, or a farmer reacting to the same soil sensors
+
+
 def cfg(policy):
     return {**DEFAULTS, **policy.get("economics", {})}
 
@@ -54,7 +57,7 @@ def compare(bench, policy, drones=3):
     patches = bench["patches"]
     rows = []
     for s in bench["strategies"]:
-        ai = s["id"] in ("agent-1", "agent-3", "thresholds")
+        ai = s["id"] not in NON_AI
         rows.append(
             {
                 "id": s["id"],
@@ -75,13 +78,40 @@ def compare(bench, policy, drones=3):
     return rows
 
 
-def payback_days(policy, bench, drones=3):
-    """Days of operation until the fleet's purchase price is recovered by its savings over the fixed schedule (None if it never is)."""
+def payback_days(policy, bench, drones=3, versus="calendar"):
+    """Days of operation until the fleet's purchase price is recovered by its savings over `versus` (None if it never is).
+    Against "triggered" (a farmer who simply reacts to the same soil sensors) the honest answer is usually 'never'."""
     rows = {r["id"]: r for r in compare(bench, policy, drones)}
     e = cfg(policy)
-    gain = rows["agent-3"]["profit"] - rows["calendar"]["profit"]  # per season, fleet running cost already deducted
+    gain = rows["agent-3"]["profit"] - rows[versus]["profit"]  # per season, fleet running cost already deducted
     if gain <= 0:
         return None
     capex = drones * e["drone_cost"]
     per_day = gain / bench["days"]
     return math.ceil(capex / per_day)
+
+
+def sizing(policy, bench, hectares, peak_factor=3.0):
+    """How many drones does a farm of `hectares` need? Scales the benchmark's measured flight hours per patch-season to the farm,
+    then divides the PEAK day (peak_factor x average) by what one drone can fly in a day. Rough by design: a planning aid."""
+    e, f = cfg(policy), policy["fleet"]
+    patches = hectares / e["patch_ha"]
+    ai = next(s for s in bench["strategies"] if s["id"] == "agent-3")
+    hours_season = ai.get("flight_hours", 60.0) * patches / bench["patches"]
+    per_day = hours_season / bench["days"]
+    cell_s = policy["field"].get("cell_m", 50.0) / float(f.get("speed_ms", 10.0))  # seconds to cross one cell
+    power_w = f["wh_per_cell_move"] * 3600.0 / cell_s  # the energy model's implied cruise power
+    flight_min = 60.0 * f["battery_wh"] * (1 - f["min_reserve_pct"] / 100) / power_w
+    cap = f.get("sorties_per_day", 3) * flight_min / 60.0
+    n = max(1, math.ceil(peak_factor * per_day / cap))
+    rows = {r["id"]: r for r in compare({**bench, "patches": round(patches)}, policy, n)}
+    return {
+        "hectares": hectares,
+        "drones": n,
+        "flight_hours_per_season": round(hours_season, 1),
+        "peak_day_hours": round(peak_factor * per_day, 2),
+        "drone_day_capacity_h": round(cap, 2),
+        "profit_ai": rows["agent-3"]["profit"],
+        "profit_smart_farmer": rows["triggered"]["profit"] if "triggered" in rows else None,
+        "profit_calendar": rows["calendar"]["profit"],
+    }

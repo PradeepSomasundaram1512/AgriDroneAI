@@ -156,6 +156,17 @@ class Farm:
                 o["pest"] = min(1.0, max(0.0, o["pest"] + self.fault_rng.choice([-0.4, 0.4])))
         return o
 
+    def satellite_pass(self, every=3, cloud_p=0.3, noise=0.05):
+        """A virtual satellite moisture proxy (stand-in for a real NDMI-derived estimate): an INDEPENDENT, noisier but unbiased view of
+        every patch, available only on pass days and not when cloudy. Stateless (own seeded stream) so it never disturbs the simulation's
+        randomness. -> {cell: moisture} or None."""
+        if self.day % every:
+            return None
+        r = random.Random(self.seed * 7919 + self.day)
+        if r.random() < cloud_p:
+            return None
+        return {c: self.cells[c].moisture + r.gauss(0, noise) for c in self.cells}
+
     def observe_all(self):
         return [self.observe(c) for c in self.cells]
 

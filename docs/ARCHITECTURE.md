@@ -71,9 +71,10 @@ sensor noise use separate random streams), so differences come only from what ea
 |---|---|---|---|---|
 | Do nothing | 87.9% ± 6.4 | 0 | 0.0 | - |
 | Fixed schedule | 100.0% ± 0.0 | 612 | 8.0 | - |
-| AI agent, rules only | 99.7% ± 0.1 | 122 | 0.56 | - |
-| AI agent, 1 flight/day | 96.0% ± 4.2 | 66 | 0.69 | - |
-| AI agent, 3 flights/day | 99.7% ± 0.1 | 126 | 0.62 | - |
+| Smart farmer (sensor triggers, no drones) | 99.6% ± 0.1 | 144 | 1.0 | - |
+| AI agent, rules only | 99.5% ± 0.2 | 110 | 0.56 | 44.9 |
+| AI agent, 1 flight/day | 95.5% ± 4.3 | 57 | 0.71 | 25.7 |
+| AI agent, 3 flights/day | 99.4% ± 0.3 | 110 | 0.66 | 46.6 |
 <!-- BENCH:END -->
 
 - The AI crew keeps **99.7% of the fixed schedule's yield with ~79% less water and ~92% fewer sprays**; doing nothing loses ~12% of the crop.

@@ -1,7 +1,7 @@
 """Is the controller right, or only right about MY simulator?  The world's hidden physics (when the crop starts to suffer, how thirsty it
 is, how fast pests grow, how noisy the sensors are) is changed WITHOUT telling the controller. A fixed-threshold controller tuned on the default
 world should degrade when the crop's real stress point is higher than its trigger; a self-calibrating one should not.
-  PYTHONPATH=. python scripts/robustness.py [seeds=2] [days=120]"""
+  PYTHONPATH=. python scripts/robustness.py [seeds=2] [days=120] [--cal]"""
 
 import os
 import statistics as st
@@ -53,5 +53,5 @@ def main(seeds=(1, 2), days=120, size=24, with_calibration=None):
 
 
 if __name__ == "__main__":
-    a = sys.argv[1:]
-    main(tuple(range(1, int(a[0]) + 1)) if a else (1, 2), int(a[1]) if len(a) > 1 else 120)
+    a = [x for x in sys.argv[1:] if x != "--cal"]
+    main(tuple(range(1, int(a[0]) + 1)) if a else (1, 2), int(a[1]) if len(a) > 1 else 120, with_calibration="--cal" in sys.argv)

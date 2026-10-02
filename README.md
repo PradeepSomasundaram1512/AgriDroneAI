@@ -2,6 +2,8 @@
 
 Autonomous precision-agriculture drone network. **Simulation-first, self-operating, and honest about what is proven.**
 
+> **Honest result (v0.5):** in the simulator the AI keeps ~99% of the crop and uses ~80% less water than a fixed schedule, but a farmer who simply reacts to the same soil sensors does about as well on yield and profit. The drones' value shown here is automation and coverage, not better agronomy. See `scripts/robustness.py` and `agridrone economics`.
+
 A scheduled GitHub Actions autopilot runs one operating cycle a day: read sensors → repair bad data → classify crop stress →
 plan multi-drone, multi-flight missions (own pads, 3D collision-checked, rechargeable batteries, wind-aware, no-fly detours) → safety-gate them → act → retrain on drift → audit.
 State is verified and committed to git, reports are published as issues, incidents open themselves, and a watchdog notices

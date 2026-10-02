@@ -158,7 +158,7 @@ def answer(question, data):
         return "Run `agridrone economics` after a benchmark to see the money view.", "rules"
     if kind == "results":
         return (
-            "In simulated seasons the AI crew kept about 99.7% of the crop with roughly 80% less water than a fixed schedule. These are simulation results, not field trials.",
+            "In simulated seasons the AI crew kept about 99% of the crop with roughly 80% less water than a fixed schedule, but a farmer who simply reacts to the same soil sensors does about as well on yield and profit (the AI uses a little less water). These are simulation results, not field trials.",
             "rules",
         )
     return (

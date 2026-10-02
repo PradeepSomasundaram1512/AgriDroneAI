@@ -56,8 +56,10 @@ def _economics(a):
     for r in economics.compare(bench, pol, a.drones):
         cols = (r["revenue"], r["water_cost"], r["spray_cost"], r["fleet_cost"], r["profit"])
         print(f"{r['name']:26s} " + " ".join(f"{v:>{w},}" for v, w in zip(cols, (10, 8, 8, 8, 10))) + f" {r['profit_per_ha']:>8}")
-    pb = economics.payback_days(pol, bench, a.drones)
-    print(f"\nfleet payback vs the fixed schedule: {'never (under these prices)' if pb is None else f'{pb} days of operation'}")
+    for vs, label in (("calendar", "the fixed schedule"), ("triggered", "a smart farmer (same soil sensors, no drones)")):
+        if any(r["id"] == vs for r in economics.compare(bench, pol, a.drones)):
+            pb = economics.payback_days(pol, bench, a.drones, vs)
+            print(f"fleet payback vs {label}: {'never (under these prices)' if pb is None else f'{pb} days of operation'}")
     return 0
 
 
@@ -110,6 +112,8 @@ def main(argv=None):
     ex.add_argument("--out", default=None, help="output folder (default: exports/day<N>)")
     ec = sub.add_parser("economics", help="profit per strategy from the measured benchmark (placeholder prices in policy.economics)")
     ec.add_argument("--drones", type=int, default=3)
+    sz = sub.add_parser("size", help="how many drones for a farm of N hectares (planning aid from the benchmark)")
+    sz.add_argument("--hectares", type=float, required=True)
     sub.add_parser("brief", help="today's plain-language briefing")
     ak = sub.add_parser("ask", help="ask the farm a question in plain English (rules; Claude too if ANTHROPIC_API_KEY is set)")
     ak.add_argument("question", nargs="+")
@@ -159,6 +163,16 @@ def main(argv=None):
             else ("docs DRIFTED from docs/benchmark.json" if a.check else "docs updated from docs/benchmark.json")
         )
         return 0 if (ok or not a.check) else 1
+    if a.cmd == "size":
+        import json
+
+        from . import economics
+        from .config import ROOT, load_policy
+
+        pol = load_policy()
+        r = economics.sizing(pol, json.loads((ROOT / "docs" / "benchmark.json").read_text()), a.hectares)
+        print(json.dumps(r, indent=1))
+        return 0
     if a.cmd == "export":
         return _export(a)
     if a.cmd == "economics":

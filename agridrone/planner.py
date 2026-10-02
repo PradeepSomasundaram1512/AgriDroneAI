@@ -9,15 +9,30 @@ Sortie 0 flies first and gets the most urgent work. Missions flying at the same 
 import math
 
 from . import model as M
-from . import traffic
+from . import terrain, traffic
 from . import wind as W
 from .safety import Mission, connect, mission_energy
 
 MAX_CONSECUTIVE_MISSES = 25  # stop searching once this many targets in a row fail to fit anywhere
 
 
-def find_targets(farm, model, thr, forecast=None, obs=None, spray_ok=True, deferred=None):
-    """-> [(priority, cell, action)] sorted most urgent first. `obs`: pre-cleaned whole-field observations (else raw sensors)."""
+def blackout_days(forecast, policy, limit_key):
+    """How many consecutive days from tomorrow the forecast wind keeps the drones on the ground (flight limit, or the tighter spray limit).
+    Cap 3: beyond that the forecast is not trustworthy enough to act on."""
+    lim, n = W.limits(policy), 0
+    for w in (forecast or [])[:3]:
+        wind = W.Wind(w.wind_ms * lim["flight_window_factor"], w.gust_ms * lim["flight_window_factor"], w.wind_from_deg)
+        flight_ok, spray_ok, _ = W.go_no_go(wind, policy)
+        if flight_ok if limit_key == "flight" else spray_ok:
+            break
+        n += 1
+    return n
+
+
+def find_targets(farm, model, thr, forecast=None, obs=None, spray_ok=True, deferred=None, gap_irrigate=0, gap_spray=0):
+    """-> [(priority, cell, action)] sorted most urgent first. `obs`: pre-cleaned whole-field observations (else raw sensors).
+    gap_irrigate / gap_spray: LOOKAHEAD, days the forecast keeps drones grounded from tomorrow. A patch that would cross its threshold
+    during the blackout is treated now (it cannot be treated then)."""
     forecast = forecast or []
     rain_soon = sum(w.rain_mm for w in forecast[:2])
     out = []
@@ -26,7 +41,7 @@ def find_targets(farm, model, thr, forecast=None, obs=None, spray_ok=True, defer
     for o in obs:
         cell = o["cell"]
         stressed = model.prob(o["ndvi"] - med, o["moisture"], o["pest"]) > 0.5
-        if o["pest"] > thr["pest_spray"] or (stressed and o["pest"] > thr["pest_spray"] - 0.06):
+        if o["pest"] > thr["pest_spray"] - 0.03 * gap_spray or (stressed and o["pest"] > thr["pest_spray"] - 0.06):
             if spray_ok:
                 out.append((o["pest"] + 0.5, cell, "spray"))
             elif deferred is not None:  # too windy to spray without drift: it waits for a calmer day (irrigation is unaffected)
@@ -34,7 +49,7 @@ def find_targets(farm, model, thr, forecast=None, obs=None, spray_ok=True, defer
             continue
         dry_now = o["moisture"] < thr["moisture_irrigate"]
         # predicted dry-down: tomorrow's loss ~ crop ET / root-zone depth (about 0.012-0.015 per day)
-        dry_soon = o["moisture"] - 0.014 < thr["moisture_irrigate"]
+        dry_soon = o["moisture"] - 0.014 * (1 + gap_irrigate) < thr["moisture_irrigate"]
         if rain_soon >= 10:  # meaningful rain forecast: only rescue critically dry patches
             if o["moisture"] < thr["moisture_irrigate"] - 0.05:
                 out.append(((thr["moisture_irrigate"] - o["moisture"]) + 0.3, cell, "irrigate"))
@@ -48,10 +63,10 @@ class _Legs:
     """Cached leg costs. A leg is the cheapest no-fly-safe path between two points: (energy, detour waypoints) or None.
     Route energy is then a sum over legs, so an insertion only needs the 3 legs it changes (O(1), not O(route))."""
 
-    def __init__(self, fleet, nofly, size, wvec=(0.0, 0.0), conn=None):
+    def __init__(self, fleet, nofly, size, wvec=(0.0, 0.0), conn=None, terr=None):
         """wvec: wind vector (m/s) at THIS drone's altitude: leg energy depends on direction, so costs are per drone.
         conn: detour-geometry cache shared by all drones (geometry does not depend on wind)."""
-        self.f, self.nofly, self.size, self.c, self.wvec = fleet, nofly, size, {}, wvec
+        self.f, self.nofly, self.size, self.c, self.wvec, self.terr = fleet, nofly, size, {}, wvec, terr
         self.air = float(fleet.get("speed_ms", 10.0))
         self.conn = conn if conn is not None else {}
 
@@ -71,6 +86,8 @@ class _Legs:
                         e = None  # cannot make headway on this leg in this wind
                         break
                     e += math.hypot(q[0] - p[0], q[1] - p[1]) * self.f["wh_per_cell_move"] * f  # true straight-line distance
+                    if self.terr is not None:
+                        e += self.terr.climb_wh(p, q)  # hills: terrain-following climb
                 self.c[k] = None if e is None else (e, hop[:-1])
         return self.c[k]
 
@@ -112,7 +129,6 @@ def plan(targets, policy, charge=None, sorties=None, allow_hold=True, fleet=None
     fleet_cfg, size = policy["fleet"], policy["field"]["size"]
     fleet_state = fleet
     fleet = fleet_cfg
-    nofly = {tuple(c) for c in policy["no_fly_cells"]}
     n, ns = fleet["drones"], sorties or fleet.get("sorties_per_day", 1)
     charge, act_e = charge or {}, fleet["wh_per_cell_action"]
     if (
@@ -120,11 +136,20 @@ def plan(targets, policy, charge=None, sorties=None, allow_hold=True, fleet=None
     ):  # the wind stored on every Mission is rounded: plan with exactly those numbers so planner and gate agree to the last bit
         wind = W.Wind.from_tuple(wind.as_tuple())
     design = wind.design() if wind is not None else None  # plan energy against sustained wind + part of the gust margin
-    shear, conn = W.limits(policy)["shear_exponent"], {}
+    shear, conns = W.limits(policy)["shear_exponent"], {}
     alt = [30 + i * (fleet["min_separation_m"] + 5) for i in range(n)]
+    terr = terrain.from_policy(policy)
     legs = [
-        _Legs(fleet, nofly, size, design.vector(alt[i], shear) if design else (0.0, 0.0), conn) for i in range(n)
-    ]  # per drone: altitude
+        _Legs(
+            fleet,
+            blk := terrain.blocked(policy, alt[i]),
+            size,
+            design.vector(alt[i], shear) if design else (0.0, 0.0),
+            conns.setdefault(frozenset(blk), {}),  # detour geometry is shared only by layers that are blocked by the same cells
+            terr,
+        )
+        for i in range(n)
+    ]  # per drone: its altitude layer (wind, and which obstacles it can clear)
 
     def usable(i, s):
         if fleet_state is not None:  # rechargeable fleet: what each battery can really spend on this sortie
@@ -170,7 +195,7 @@ def plan(targets, policy, charge=None, sorties=None, allow_hold=True, fleet=None
                 drone=i,
                 altitude_m=alt[i],
                 targets=ex,
-                energy_wh=mission_energy((0, 0), ex, fleet, design, alt[i], shear),
+                energy_wh=mission_energy((0, 0), ex, fleet, design, alt[i], shear, terr),
                 sortie=s,
                 wind=wind.as_tuple() if wind is not None else None,
             )

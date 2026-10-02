@@ -26,9 +26,34 @@ def _median(v):
     return v[n // 2] if n % 2 else (v[n // 2 - 1] + v[n // 2]) / 2
 
 
-def clean(obs, state_dir=None, enabled=True):
-    """obs: [{'cell','moisture','ndvi','pest',...}] for the whole field. -> (cleaned obs, report dict). Never raises on bad data."""
+BIAS_TOL, BIAS_MIN_PASSES, BIAS_KEEP = 0.09, 3, 4
+
+
+def _bias_check(by, reference, st):
+    """Independent cross-check: a sensor that is consistently wetter/drier than the satellite proxy (relative to the field-wide offset
+    between them) has drifted. Slow calibration drift is invisible to every in-field check because its neighbours look 'smooth'.
+    -> {cell: estimated bias}."""
+    res = {c: by[c]["moisture"] - reference[c] for c in by if c in reference and math.isfinite(by[c]["moisture"])}
+    if res:
+        off = _median(list(res.values()))
+        for c, r in res.items():
+            key = f"{c[0]},{c[1]}"
+            st["r"][key] = (st["r"].get(key, []) + [round(r - off, 4)])[-BIAS_KEEP:]
+    out = {}
+    for c in by:
+        h = st["r"].get(f"{c[0]},{c[1]}", [])
+        if len(h) >= BIAS_MIN_PASSES:
+            for sign in (1, -1):  # most recent passes only: a drift that started recently must not be diluted by older, healthy ones
+                if sum(sign * r > BIAS_TOL for r in h) >= BIAS_MIN_PASSES:
+                    out[c] = _median([r for r in h if sign * r > BIAS_TOL])
+    return out
+
+
+def clean(obs, state_dir=None, enabled=True, reference=None):
+    """obs: [{'cell','moisture','ndvi','pest',...}] for the whole field. reference: optional {cell: moisture} from an independent source
+    (a satellite pass; {} on a day without one) used to catch slow sensor bias. -> (cleaned obs, report dict). Never raises on bad data."""
     st = load_json("quality.json", {"h": {}, "s": {}}, state_dir)
+    st.setdefault("r", {})
     by = {tuple(o["cell"]): o for o in obs}
     flagged, reasons = {}, {}
     for cell, o in by.items():
@@ -59,11 +84,16 @@ def clean(obs, state_dir=None, enabled=True):
             flagged[cell] = bad
             for w in bad.values():
                 reasons[w] = reasons.get(w, 0) + 1
+    bias = _bias_check(by, reference, st) if reference is not None else {}  # {} = check on, no pass today: judge on remembered passes
+    for cell in bias:
+        flagged.setdefault(cell, {})["moisture"] = "satellite_bias"
+        reasons["satellite_bias"] = reasons.get("satellite_bias", 0) + 1
     # strikes over a rolling window -> quarantine (a sensor that keeps misbehaving is treated as failed, even on 'good' days)
     quarantined = set()
+    hard = {c for c, b in flagged.items() if any(v != "satellite_bias" for v in b.values())}  # a correctable drift is not a failed sensor
     for cell in by:
         key = f"{cell[0]},{cell[1]}"
-        s = (st["s"].get(key, []) + [1 if cell in flagged else 0])[-WINDOW:]
+        s = (st["s"].get(key, []) + [1 if cell in hard else 0])[-WINDOW:]
         st["s"][key] = s
         if sum(s) >= STRIKES:
             quarantined.add(cell)
@@ -79,6 +109,10 @@ def clean(obs, state_dir=None, enabled=True):
         for o in obs:
             cell, o2 = tuple(o["cell"]), dict(o)
             chans = list(CH) if cell in quarantined else list(flagged.get(cell, {}))
+            if cell in bias and cell not in quarantined:
+                o2["moisture"] = o["moisture"] - bias[cell]  # known drift: subtract it rather than discard the reading
+                chans = [c for c in chans if c != "moisture"]
+                o2["repaired"] = True
             for ch in chans:
                 good = [
                     by[(cell[0] + dx, cell[1] + dy)][ch]
@@ -91,7 +125,7 @@ def clean(obs, state_dir=None, enabled=True):
                     and math.isfinite(by[(cell[0] + dx, cell[1] + dy)][ch])
                 ]
                 o2[ch] = _median(good) if good else _median([x[ch] for x in obs if math.isfinite(x[ch])])
-            o2["repaired"] = bool(chans)
+            o2["repaired"] = bool(chans) or o2.get("repaired", False)
             out.append(o2)
     else:
         out = [dict(o, repaired=False) for o in obs]

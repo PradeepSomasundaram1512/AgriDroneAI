@@ -9,7 +9,8 @@
    "yield": 0.8792,
    "yield_sd": 0.0643,
    "water_mm": 0,
-   "sprays": 0.0
+   "sprays": 0.0,
+   "flight_hours": 0.0
   },
   {
    "id": "calendar",
@@ -17,49 +18,67 @@
    "yield": 1.0,
    "yield_sd": 0.0,
    "water_mm": 612,
-   "sprays": 8.0
+   "sprays": 8.0,
+   "flight_hours": 0.0
+  },
+  {
+   "id": "triggered",
+   "name": "Smart farmer (sensor triggers, no drones)",
+   "yield": 0.9964,
+   "yield_sd": 0.0015,
+   "water_mm": 144,
+   "sprays": 1.0,
+   "flight_hours": 0.0
   },
   {
    "id": "thresholds",
    "name": "AI agent, rules only",
-   "yield": 0.9967,
-   "yield_sd": 0.0008,
-   "water_mm": 122,
-   "sprays": 0.56
+   "yield": 0.9945,
+   "yield_sd": 0.0024,
+   "water_mm": 110,
+   "sprays": 0.56,
+   "flight_hours": 44.9
   },
   {
    "id": "agent-1",
    "name": "AI agent, 1 flight/day",
-   "yield": 0.9602,
-   "yield_sd": 0.0422,
-   "water_mm": 66,
-   "sprays": 0.69
+   "yield": 0.955,
+   "yield_sd": 0.0428,
+   "water_mm": 57,
+   "sprays": 0.71,
+   "flight_hours": 25.7
   },
   {
    "id": "agent-3",
    "name": "AI agent, 3 flights/day",
-   "yield": 0.997,
-   "yield_sd": 0.0006,
-   "water_mm": 126,
-   "sprays": 0.62
+   "yield": 0.9941,
+   "yield_sd": 0.003,
+   "water_mm": 110,
+   "sprays": 0.66,
+   "flight_hours": 46.6
   }
  ],
  "ml_value": {
-  "mean": 0.0004,
-  "wins": "6/6"
+  "mean": -0.0004,
+  "wins": "3/6"
  },
  "faults": {
   "rate": 0.04,
   "variants": [
    {
     "name": "quality filter OFF",
-    "yield": 0.9935,
-    "water_mm": 184
+    "yield": 0.9857,
+    "water_mm": 156
    },
    {
     "name": "quality filter ON",
-    "yield": 0.9932,
-    "water_mm": 131
+    "yield": 0.9898,
+    "water_mm": 113
+   },
+   {
+    "name": "ON + satellite cross-check",
+    "yield": 0.9908,
+    "water_mm": 109
    }
   ]
  }

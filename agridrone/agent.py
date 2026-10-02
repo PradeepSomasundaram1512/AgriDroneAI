@@ -138,7 +138,8 @@ class Cycle:
     def perceive(self):
         p, sd = self.p, self.sd
         # data quality: detect + repair bad sensor readings BEFORE anything (model, planner) sees them
-        self.obs, self.dq = quality.clean(self.farm.observe_all(), sd, enabled=p.get("quality_filter", True))
+        ref = (self.farm.satellite_pass() or {}) if p.get("quality", {}).get("satellite_check") else None  # independent look at every patch
+        self.obs, self.dq = quality.clean(self.farm.observe_all(), sd, enabled=p.get("quality_filter", True), reference=ref)
         if self.dq["flagged"] or self.dq["quarantined"]:
             self.audit("sensor_faults", flagged=self.dq["flagged"], quarantined=len(self.dq["quarantined"]), reasons=self.dq["reasons"])
         self.sample = _labelled_sample(self.farm, self.obs, 120, self.rng)
@@ -234,7 +235,18 @@ class Cycle:
         self.spray_deferred = []
         if self.flight_ok:
             model = self.mdl if p.get("model_enabled", True) else M.StressModel()
-            self.targets = planner.find_targets(farm, model, self.thr, self.forecast, self.obs, spray_ok, self.spray_deferred)
+            look = p.get("lookahead", {}).get("enabled", False)  # plan around forecast wind blackouts
+            self.targets = planner.find_targets(
+                farm,
+                model,
+                self.thr,
+                self.forecast,
+                self.obs,
+                spray_ok,
+                self.spray_deferred,
+                planner.blackout_days(self.forecast, p, "flight") if look else 0,
+                planner.blackout_days(self.forecast, p, "spray") if look else 0,
+            )
         else:
             self.targets = []
             self.audit("grounded_by_wind", reason=wind_why, wind=self.wind.as_tuple())

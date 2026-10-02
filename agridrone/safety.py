@@ -6,7 +6,8 @@ cross a no-fly zone on its way to a legal target), vertical separation between d
 import math
 from dataclasses import dataclass, field
 
-from . import traffic, wind as W
+from . import terrain, traffic
+from . import wind as W
 
 PAD = 0.3  # lateral safety margin around a no-fly cell, in cell widths
 
@@ -24,7 +25,7 @@ class Mission:
     wind: tuple = None  # (speed, gust, from_deg) at 10 m that this plan was made for; the gate re-checks against it
 
 
-def mission_energy(start, targets, fleet, wind=None, altitude=30.0, shear=0.2):
+def mission_energy(start, targets, fleet, wind=None, altitude=30.0, shear=0.2, terr=None):
     """Energy (Wh) of a route. With `wind` (wind.Wind at 10 m) each leg is scaled by airspeed / ground speed at the flight
     altitude, so headwinds cost more and tailwinds less; returns inf if any leg cannot make headway."""
     wvec = wind.vector(altitude, shear) if wind is not None else (0.0, 0.0)
@@ -35,8 +36,10 @@ def mission_energy(start, targets, fleet, wind=None, altitude=30.0, shear=0.2):
         f = W.leg_factor(dx, dy, air, wvec)
         if f is None:
             return float("inf")
-        e += math.hypot(dx, dy) * fleet["wh_per_cell_move"] * f + (
-            0.0 if action == "via" else fleet["wh_per_cell_action"]
+        e += (
+            (terr.climb_wh(cur, cell) if terr is not None else 0.0)
+            + math.hypot(dx, dy) * fleet["wh_per_cell_move"] * f
+            + (0.0 if action == "via" else fleet["wh_per_cell_action"])
         )  # straight-line flight
         cur = cell
     return e
@@ -98,7 +101,8 @@ def validate(missions, policy):
     v = []
     if policy.get("kill_switch"):
         return ["kill_switch engaged"]
-    fleet, nofly = policy["fleet"], {tuple(c) for c in policy["no_fly_cells"]}
+    fleet = policy["fleet"]
+    terr = terrain.from_policy(policy)
     usable = fleet["battery_wh"] * (1 - fleet["min_reserve_pct"] / 100)
     for s in sorted({m.sortie for m in missions}):  # only drones airborne together must be separated
         alts = [m.altitude_m for m in missions if m.sortie == s]
@@ -118,7 +122,7 @@ def validate(missions, policy):
         wind = W.Wind.from_tuple(m.wind)
         shear = W.limits(policy)["shear_exponent"]
         # the gate does not trust the planner's number: it recomputes energy for THIS wind at THIS drone's altitude
-        energy = mission_energy((0, 0), m.targets, fleet, wind.design() if m.wind else None, m.altitude_m, shear)
+        energy = mission_energy((0, 0), m.targets, fleet, wind.design() if m.wind else None, m.altitude_m, shear, terr)
         if energy == float("inf"):
             v.append(f"drone {m.drone}: a leg cannot make headway in this wind at {m.altitude_m} m")
         elif energy > usable:
@@ -127,6 +131,7 @@ def validate(missions, policy):
             flight_ok, spray_ok, why = W.go_no_go(wind, policy)
             if not flight_ok or (not spray_ok and any(a == "spray" for _, a in m.targets)):
                 v.append(f"drone {m.drone}: {why}")
+        nofly = terrain.blocked(policy, m.altitude_m)  # no-fly cells + obstacles this drone's layer cannot clear
         pts = [(0, 0)] + [tuple(c) for c, _ in m.targets] + [(0, 0)]
         for cell, _ in m.targets:
             if tuple(cell) in nofly:
@@ -139,16 +144,20 @@ def validate(missions, policy):
 
 def repair(missions, policy):
     """Drop offending targets / missions until valid. Returns (missions, dropped_count)."""
-    fleet, nofly = policy["fleet"], {tuple(c) for c in policy["no_fly_cells"]}
+    fleet = policy["fleet"]
+    terr = terrain.from_policy(policy)
     usable = fleet["battery_wh"] * (1 - fleet["min_reserve_pct"] / 100)
     dropped = 0
     for m in missions:
+        nofly = terrain.blocked(policy, m.altitude_m)
         keep = [t for t in m.targets if tuple(t[0]) not in nofly]
         dropped += len(m.targets) - len(keep)
         m.targets = keep
         wind = W.Wind.from_tuple(m.wind).design() if m.wind else None  # energy is planned against the DESIGN wind (gust margin)
-        while m.targets and mission_energy((0, 0), m.targets, fleet, wind, m.altitude_m) > usable:
+        while m.targets and mission_energy((0, 0), m.targets, fleet, wind, m.altitude_m, W.limits(policy)["shear_exponent"], terr) > usable:
             m.targets.pop()
             dropped += 1
-        m.energy_wh = mission_energy((0, 0), m.targets, fleet, wind, m.altitude_m) if m.targets else 0.0
+        m.energy_wh = (
+            mission_energy((0, 0), m.targets, fleet, wind, m.altitude_m, W.limits(policy)["shear_exponent"], terr) if m.targets else 0.0
+        )
     return [m for m in missions if m.targets], dropped

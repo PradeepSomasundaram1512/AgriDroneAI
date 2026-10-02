@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.5.0 (from a merciless self-review)
+- **Honest baseline**: the benchmark now includes a *smart farmer* (same soil sensors, waters when dry, no drones). Result: the AI matches that farmer on yield and profit and saves a little water; against it the drones do not pay back under placeholder prices. Money view, briefing and docs say so. The fixed-schedule comparison is kept but is no longer the headline.
+- **Robustness sweep** (`scripts/robustness.py`): 10 variants of the hidden crop physics. Finding: fixed thresholds lose up to ~4 yield points when the crop is more sensitive than assumed. Self-calibrating thresholds (`calibration.enabled`) recover some of it but spend much more water; left **off**.
+- **Satellite cross-check** for slow sensor drift (virtual satellite pass in the simulator): bias recall 0.53 -> 0.88; with 4% faulty sensors yield 0.990 -> 0.991 and water 113 -> 109 mm. On by default.
+- **Terrain and obstacles** (`terrain.py`): climb energy shared by planner and gate, per-altitude-layer obstacle blocking, elevation grids.
+- **Lookahead planner** (forecast wind blackouts): measured no benefit (0.9936 vs 0.9939), left **off** (`lookahead.enabled`).
+- **Fleet sizing**: `agridrone size --hectares N`. Economics gained payback against the smart farmer.
+- Engineering: `run_cycle` split into `Cycle` stages guarded by a golden-record test; lossless log rotation; docs tables generated from `docs/benchmark.json` (`agridrone docs-sync --check` in CI); dashboard JS executed in tests; export geometry fixes; sampling-margin fix in the collision checker.
+- Not built, on purpose: satellite-cued scouting (every patch already has a sensor in this simulator, so it could add nothing measurable).
+
 ## 0.4.0
 - **Wind handling**: wind triangle energy/time per leg (headwind/tailwind/crosswind, infeasible legs), wind shear by altitude layer, flight and spray go/no-go limits, gust-widened collision clearance, spray drift in the simulator, wind-aware planner and an independent re-check in the safety gate, PX4 wind failsafe armed on hardware, measured-wind pre-flight check. Real wind forecasts via Open-Meteo.
 - **GPS-loss handling**: pre-flight GPS quality, in-flight watcher (freeze payload, hold, resume or land in place), lower drones ordered home, grounded-drone tracking and recovery, simulator outages, tested on real PX4 SITL.

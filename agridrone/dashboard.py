@@ -253,6 +253,7 @@ def build_data(state_dir=None, policy=None):
             data["economics"] = {
                 "rows": rows,
                 "payback_days": economics.payback_days(policy, bench, policy["fleet"]["drones"]),
+                "payback_vs_smart_days": economics.payback_days(policy, bench, policy["fleet"]["drones"], "triggered"),
                 "hectares": rows[0]["hectares"],
             }
         except (KeyError, ZeroDivisionError):
@@ -567,8 +568,8 @@ if(D.briefing&&D.briefing.length){$("#briefCard").style.display="block";$("#brie
  $("#moneySub").textContent=`One season on ${E.hectares} hectares, using PLACEHOLDER prices (water, chemicals, crop value, drones). Replace them in the policy file with yours.`;
  const mx=Math.max(...E.rows.map(r=>r.revenue)),f=v=>"$"+Math.round(v).toLocaleString();
  $("#money").innerHTML=E.rows.map(r=>`<div class="brow${r.id==="agent-3"?" hl":""}"><b>${r.name}</b><div><span class="cap">Profit ${f(r.profit)} (${f(r.profit_per_ha)} per hectare)</span><div class="b"><div style="width:${Math.max(2,r.profit/mx*100)}%;background:var(--acc)"></div></div></div><div><span class="cap">Costs: water ${f(r.water_cost)} · spray ${f(r.spray_cost)} · fleet ${f(r.fleet_cost)}</span><div class="b"><div style="width:${Math.max(2,r.cost/mx*400)}%;background:var(--warn)"></div></div></div></div>`).join("");
- const ai=E.rows.find(r=>r.id==="agent-3"),cal=E.rows.find(r=>r.id==="calendar"),none=E.rows.find(r=>r.id==="none");
- $("#moneyNote").innerHTML=`With these prices the drone crew earns <b>${f(ai.profit-cal.profit)}</b> more per season than the fixed schedule`+(E.payback_days?` and pays back the drones in about <b>${E.payback_days} days</b> of operation`:"")+`. A fixed schedule can even earn <i>less</i> than doing nothing when water and spray cost more than the crop they save${cal.profit<none.profit?" (it does here)":""}. <i>(Simulation + placeholder prices: a decision aid, not a forecast.)</i>`})();
+ const ai=E.rows.find(r=>r.id==="agent-3"),cal=E.rows.find(r=>r.id==="calendar"),none=E.rows.find(r=>r.id==="none"),sm=E.rows.find(r=>r.id==="triggered");
+ $("#moneyNote").innerHTML=`With these prices the drone crew earns <b>${f(ai.profit-cal.profit)}</b> more per season than the fixed schedule`+(E.payback_days?` and pays back the drones in about <b>${E.payback_days} days</b> of operation`:"")+`. `+(sm?`<b>The honest comparison is a smart farmer</b> who reads the same soil sensors and waters when it is dry: that farmer earns ${f(sm.profit)}, versus ${f(ai.profit)} for the drones (${f(ai.profit-sm.profit)} difference). ${E.payback_vs_smart_days?`Against that farmer the drones take about ${(E.payback_vs_smart_days/365).toFixed(0)} years to pay back`:"Against that farmer the drones never pay back"} under these prices: the drones' real edge is doing it automatically, not doing it better. `:"")+`A fixed schedule can even earn <i>less</i> than doing nothing when water and spray cost more than the crop they save${cal.profit<none.profit?" (it does here)":""}. <i>(Simulation + placeholder prices: a decision aid, not a forecast.)</i>`})();
 // ---------- weather, sensors, workload, benchmark ----------
 const W=D.weather,ic=r=>r>=10?"🌧️":r>=1?"🌦️":"☀️";
 if(W&&W.today){const t=W.today,soon=W.forecast.slice(0,2).reduce((a,f)=>a+f.rain_mm,0);

@@ -132,5 +132,20 @@
     "margin_moisture": 0.015,
     "margin_pest": 0.02,
     "_note": "Learn the crop's real stress points from its greenness response and set the action thresholds just beyond them (bounded around the policy defaults). Off until validated on your crop."
+  },
+  "lookahead": {
+    "enabled": false,
+    "_note": "Treat patches that would cross their threshold during a forecast wind blackout now, while the drones can fly. Off until measured (scripts/eval_lookahead.py)."
+  },
+  "quality": {
+    "satellite_check": true,
+    "_note": "Cross-check moisture sensors against an independent satellite pass to catch slow calibration drift (scripts/eval_quality.py --satellite)."
+  },
+  "terrain": {
+    "relief_m": 0.0,
+    "obstacles": [],
+    "wh_per_m_climb": 0.03,
+    "clearance_m": 10.0,
+    "_note": "Flat by default. Set relief_m (synthetic hills) or an `elevation` grid (metres, from a DEM) to charge climb energy; obstacles are [x, y, height_m] and block altitude layers that cannot clear them by clearance_m."
   }
 }

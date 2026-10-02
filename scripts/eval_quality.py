@@ -9,13 +9,13 @@ from agridrone import quality, weather
 from agridrone.sim import Farm
 
 
-def evaluate(seed, days=60, rate=0.06, size=24):
+def evaluate(seed, days=60, rate=0.06, size=24, satellite=False):
     f, d = Farm.create(size, seed, fault_rate=rate), tempfile.mkdtemp()
     hit, miss = {}, {}  # per mode: faulty-day detections / misses
     fp = healthy = 0
     for _ in range(days):
         f.step(weather.synthetic(f.day + 1, seed))
-        _, rep = quality.clean(f.observe_all(), d)
+        _, rep = quality.clean(f.observe_all(), d, reference=(f.satellite_pass() or {}) if satellite else None)
         quarantined = set(map(tuple, rep["quarantined"]))
         flagged = set(map(tuple, rep["cells"])) | quarantined
         for c in f.cells:
@@ -30,9 +30,13 @@ def evaluate(seed, days=60, rate=0.06, size=24):
 
 
 if __name__ == "__main__":
+    import sys
+
+    sat = "--satellite" in sys.argv
+    print("with the satellite cross-check" if sat else "in-field checks only")
     H, Mi, FP, HL = {}, {}, 0, 0
     for seed in range(1, 6):
-        h, m, fp, hl = evaluate(seed)
+        h, m, fp, hl = evaluate(seed, satellite=sat)
         for k, v in h.items():
             H[k] = H.get(k, 0) + v
         for k, v in m.items():
