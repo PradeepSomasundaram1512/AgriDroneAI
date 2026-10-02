@@ -5,3 +5,5 @@ __pycache__/
 .coverage
 .ruff_cache/
 htmlcov/
+video/build/
+video/*.mp4
