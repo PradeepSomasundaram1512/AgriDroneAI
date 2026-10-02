@@ -96,6 +96,22 @@ class MavsdkLink:
     async def rtl(self):
         await self.sys.action.return_to_launch()
 
+    async def ensure_failsafe(self):
+        """Autopilot-side data-link-loss failsafe must be RETURN (the ground station cannot command RTL once the link
+        is gone). PX4: NAV_DLL_ACT 2 = return. Set, then read back to verify."""
+        try:
+            await self.sys.param.set_param_int("NAV_DLL_ACT", 2)
+            return await self.sys.param.get_param_int("NAV_DLL_ACT") == 2
+        except Exception:
+            return False
+
+    async def connection_lost(self, grace_s):
+        """Returns once the vehicle link has been down for grace_s seconds."""
+        async for st in self.sys.core.connection_state():
+            if not st.is_connected:
+                await asyncio.sleep(grace_s)
+                return True
+
     async def wait_airborne(self, timeout):
         async def wait():
             async for in_air in self.sys.telemetry.in_air():
@@ -161,6 +177,8 @@ class FlightExecutor:
             need = mission.energy_wh / self.fleet["battery_wh"] * 100 + reserve
             if pct is None or pct < need:
                 return FlightResult(mission.drone, "refused", 0, total, f"battery {pct}% < required {need:.0f}%")
+            if hasattr(link, "ensure_failsafe") and not await link.ensure_failsafe():
+                return FlightResult(mission.drone, "refused", 0, total, "could not set/verify autopilot link-loss failsafe (RTL)")
             await link.upload(wps, self.hw.get("speed_m_s", 5.0), self.hw.get("dwell_s", 4))
             log.info("drone %s: mission uploaded (%d waypoints), arming + starting", mission.drone, total)
             await link.start()
@@ -171,20 +189,65 @@ class FlightExecutor:
                 await self._abort(link)
                 return FlightResult(mission.drone, "aborted", 0, total, "no takeoff confirmed; RTL/land commanded")
             log.info("drone %s: airborne, monitoring", mission.drone)
-            res = await asyncio.wait_for(self._monitor(link, mission, total, reserve), self.hw.get("max_flight_s", 1200))
+            res = await asyncio.wait_for(self._watched(link, mission, total, reserve), self.hw.get("max_flight_s", 1200))
             log.info("drone %s: mission %s (%d/%d), waiting for landing", mission.drone, res.status, res.completed, total)
             # the drone is only "done" once it is back on the ground; the next sortie must not start before that
             if not await link.wait_landed(self.hw.get("land_wait_s", 300)):
                 res.status, res.reason = "aborted", (res.reason + "; did not confirm landing").lstrip("; ")
             return res
         except asyncio.TimeoutError:
-            await self._abort(link)
-            return FlightResult(mission.drone, "aborted", 0, total, "timeout; RTL commanded")
+            sent = await self._abort(link)
+            return FlightResult(mission.drone, "aborted", 0, total, "timeout; " + ("RTL commanded" if sent else "RTL NOT sent"))
         except Exception as e:  # any surprise => fail safe
-            await self._abort(link)
-            return FlightResult(mission.drone, "aborted", 0, total, f"{type(e).__name__}: {e}; RTL commanded")
+            sent = await self._abort(link)
+            return FlightResult(mission.drone, "aborted", 0, total, f"{type(e).__name__}: {str(e)[:80]}; " + ("RTL commanded" if sent else "RTL could NOT be sent; relying on autopilot failsafe"))
 
-    async def _monitor(self, link, mission, total, reserve):
+    async def _watched(self, link, mission, total, reserve):
+        """Run the monitor while watching the vehicle link; on loss, try RTL and report honestly."""
+        state = {"reached": 0}
+        mon = asyncio.ensure_future(self._monitor(link, mission, total, reserve, state))
+        guard = asyncio.ensure_future(self._battery_guard(link, mission, total, reserve, state))
+        lost = asyncio.ensure_future(link.connection_lost(self.hw.get("link_loss_grace_s", 3))) if hasattr(link, "connection_lost") else None
+        try:
+            await asyncio.wait([t for t in (mon, guard, lost) if t], return_when=asyncio.FIRST_COMPLETED)
+            if mon.done():
+                return mon.result()
+            if guard.done() and not guard.cancelled() and guard.exception() is None:
+                mon.cancel()
+                return guard.result()
+            mon.cancel()
+            sent = await self._abort(link)
+            how = "RTL commanded" if sent else "RTL could NOT be sent; relying on autopilot link-loss failsafe"
+            log.error("drone %s: LINK LOST in flight; %s", mission.drone, how)
+            return FlightResult(mission.drone, "aborted", state["reached"], total, f"link lost; {how}")
+        finally:
+            for t in (mon, guard, lost):
+                if t and not t.done():
+                    t.cancel()
+                elif t and not t.cancelled():
+                    t.exception()  # retrieve so a dead link stream does not log "never retrieved"
+
+    async def _battery_guard(self, link, mission, total, reserve, state):
+        """Battery is polled on its own timer: waypoint-progress events can be tens of seconds apart (found in SITL:
+        a progress-driven check only fired at 10% when the 25% reserve was crossed ~40s earlier)."""
+        poll = self.hw.get("battery_poll_s", 2.0)
+        while True:
+            await asyncio.sleep(poll)
+            try:
+                pct = await asyncio.wait_for(link.battery_pct(), self.hw.get("telemetry_timeout_s", 6))
+            except asyncio.TimeoutError:
+                sent = await self._abort(link)
+                how = "RTL commanded" if sent else "RTL could NOT be sent; relying on autopilot link-loss failsafe"
+                log.error("drone %s: TELEMETRY SILENT (link lost); %s", mission.drone, how)
+                return FlightResult(mission.drone, "aborted", state["reached"], total, f"link lost (telemetry silent); {how}")
+            if pct is not None and pct < reserve:
+                sent = await self._abort(link)
+                log.error("drone %s: battery %.0f%% below reserve %s%%; %s", mission.drone, pct, reserve, "RTL commanded" if sent else "RTL NOT sent")
+                return FlightResult(mission.drone, "aborted", state["reached"], total,
+                                    f"battery {pct:.0f}% below reserve; " + ("RTL commanded" if sent else "RTL could NOT be sent"))
+
+    async def _monitor(self, link, mission, total, reserve, state=None):
+        state = state if state is not None else {"reached": 0}
         reached = 0
         async for cur, tot in link.progress():
             if tot != total:  # stale event from a different mission
@@ -193,6 +256,7 @@ class FlightExecutor:
             while reached < min(cur, total):  # waypoint `reached` was just completed
                 await self.payload.trigger(*reversed(mission.targets[reached]))
                 reached += 1
+                state["reached"] = reached
             pct = await link.battery_pct()
             if pct is not None and pct < reserve:
                 await link.rtl()
@@ -204,12 +268,14 @@ class FlightExecutor:
             reached += 1
         return FlightResult(mission.drone, "completed", reached, total)
 
-    @staticmethod
-    async def _abort(link):
+    async def _abort(self, link):
+        """Command return-to-launch, time-bounded (a dead link makes gRPC calls hang forever).
+        True only if the command was actually sent."""
         try:
-            await link.rtl()
+            await asyncio.wait_for(link.rtl(), self.hw.get("rtl_timeout_s", 5))
+            return True
         except Exception:
-            pass
+            return False
 
     async def fly(self, missions, dry_run=False):
         if not dry_run:

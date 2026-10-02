@@ -29,7 +29,14 @@ class FakeLink:
             if self.hang: await asyncio.sleep(10)
             self.bat -= self.drain
             yield i, n
-    async def rtl(self): self.rtl_called = True
+    async def rtl(self):
+        if getattr(self, 'rtl_fails', False): raise ConnectionError('link down')
+        self.rtl_called = True
+    async def ensure_failsafe(self): return not getattr(self, 'bad_failsafe', False)
+    async def connection_lost(self, grace):
+        if getattr(self, 'lose_link', False):
+            await asyncio.sleep(0.05); return True
+        await asyncio.sleep(3600)
     async def wait_airborne(self, timeout): return not getattr(self, 'no_takeoff', False)
     async def wait_landed(self, timeout): return not getattr(self, 'stuck', False)
 
@@ -170,3 +177,53 @@ def test_stale_progress_event_is_ignored():
     pay = NullPayload()
     r = asyncio.run(FlightExecutor(pol(), link_factory=lambda a: Stale(a), payload=pay).fly([mission()]))[0]
     assert r.status == "completed" and len(pay.events) == 2
+
+
+def test_refuses_if_autopilot_failsafe_cannot_be_verified():
+    class Bad(FakeLink):
+        bad_failsafe = True
+    r = asyncio.run(FlightExecutor(pol(), link_factory=lambda a: Bad(a), payload=NullPayload()).fly([mission()]))[0]
+    assert r.status == "refused" and "failsafe" in r.reason and not FakeLink.instances[-1].started
+
+
+def test_link_loss_midflight_aborts_and_reports_rtl_state():
+    class Slow(FakeLink):
+        lose_link = True
+        async def progress(self):
+            await asyncio.sleep(1); yield 1, 2
+    r = asyncio.run(FlightExecutor(pol(), link_factory=lambda a: Slow(a), payload=NullPayload()).fly([mission()]))[0]
+    assert r.status == "aborted" and "link lost" in r.reason and "RTL commanded" in r.reason
+    class SlowDead(Slow):
+        rtl_fails = True
+    r = asyncio.run(FlightExecutor(pol(), link_factory=lambda a: SlowDead(a), payload=NullPayload()).fly([mission()]))[0]
+    assert "could NOT be sent" in r.reason and "failsafe" in r.reason
+
+
+def test_battery_guard_fires_even_when_no_progress_events_arrive():
+    class Silent(FakeLink):
+        async def battery_pct(self):
+            self.bat -= 15; return self.bat      # drains on every poll
+        async def progress(self):
+            await asyncio.sleep(5); yield 2, 2   # no waypoint events for a long time
+    link = {}
+    def f(a):
+        link["l"] = Silent(a, battery=80); return link["l"]
+    e = FlightExecutor(pol(battery_poll_s=0.02), link_factory=f, payload=NullPayload())
+    r = asyncio.run(e.fly([mission()]))[0]
+    assert r.status == "aborted" and "below reserve" in r.reason and link["l"].rtl_called
+
+
+def test_dead_link_hangs_are_bounded_telemetry_silence_aborts():
+    class Dead(FakeLink):
+        async def battery_pct(self):
+            if getattr(self, "dead", False):
+                await asyncio.sleep(3600)        # gRPC to a dead server never returns
+            return 90.0
+        async def progress(self):
+            self.dead = True
+            await asyncio.sleep(3600); yield 1, 2
+        async def rtl(self):
+            await asyncio.sleep(3600)
+    e = FlightExecutor(pol(battery_poll_s=0.02, telemetry_timeout_s=0.1, rtl_timeout_s=0.1), link_factory=lambda a: Dead(a), payload=NullPayload())
+    r = asyncio.run(asyncio.wait_for(e.fly([mission()]), 5))[0]
+    assert r.status == "aborted" and "link lost" in r.reason and "could NOT be sent" in r.reason
