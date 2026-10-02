@@ -124,7 +124,7 @@ def test_agent_queues_and_ground_station_flies(tmp_path):
         run_cycle(p, tmp_path)
     q = store.read_jsonl("queue.jsonl", tmp_path)
     assert q and q[-1]["approval"] == "auto"
-    e, _ = ex(p)
+    e, _ = ex(p, battery=100)
     out = process_once(p, tmp_path, executor=e)
     assert out["status"] == "completed"
     assert process_once(p, tmp_path, executor=e) is None  # already flown, nothing re-flown
@@ -138,7 +138,7 @@ def test_supervised_waits_for_human_and_expiry(tmp_path):
         run_cycle(p, tmp_path)
     q = store.read_jsonl("queue.jsonl", tmp_path)[-1]
     assert q["approval"] == "human"
-    e, _ = ex(p)
+    e, _ = ex(p, battery=100)
     assert process_once(p, tmp_path, executor=e) is None
     assert process_once(p, tmp_path, executor=e, human_approved=q["id"])["status"] == "completed"
 

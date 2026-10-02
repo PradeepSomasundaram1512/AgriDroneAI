@@ -1,4 +1,4 @@
-"""Greedy priority-weighted mission planner. One altitude layer per drone => separation by construction."""
+"""Greedy priority-weighted, load-balancing mission planner (minimises the longest sortie, not total energy). One altitude layer per drone => separation by construction."""
 from .safety import Mission, mission_energy
 
 
@@ -29,7 +29,7 @@ def plan(targets, policy):
             e = mission_energy((0, 0), trial, fleet)
             if e > usable:
                 continue
-            cost = e - m.energy_wh
+            cost = e  # balance load: pick the drone whose total mission stays shortest (energy ~ flight time)
             if best is None or cost < best_cost:
                 best, best_cost = i, cost
         if best is not None:

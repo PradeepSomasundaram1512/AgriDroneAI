@@ -11,6 +11,7 @@ import asyncio
 import logging
 import math
 import os
+import re
 from dataclasses import dataclass, field
 
 from . import safety
@@ -49,7 +50,10 @@ class MavsdkLink:
             import mavsdk_grpc as mavsdk
         except ImportError as e:
             raise PreflightError("install hardware extra: pip install 'agridrone[hardware]'") from e
-        self._m, self.address, self.sys = mavsdk, address, mavsdk.System()
+        # one mavsdk_server per vehicle, so each needs its own gRPC port (derived from the vehicle's UDP port)
+        m = re.search(r":(\d+)$", address)
+        grpc_port = 50000 + int(m.group(1)) % 10000 if m else 50051
+        self._m, self.address, self.sys = mavsdk, address, mavsdk.System(port=grpc_port)
 
     async def connect(self, timeout=30):
         await self.sys.connect(system_address=self.address)

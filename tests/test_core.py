@@ -62,3 +62,12 @@ def test_dashboard_renders(tmp_path):
         run_cycle(pol, tmp_path)
     out = render(tmp_path, pol)
     assert "AgriDroneAI" in out and "<svg" in out
+
+
+def test_planner_spreads_work_across_drones():
+    pol = load_policy()
+    tg = [(1.0, c, "irrigate") for c in [(3, 3), (8, 3), (3, 8), (8, 8), (12, 5), (5, 12)]]
+    ms = planner.plan(tg, pol)
+    assert len(ms) == pol["fleet"]["drones"] and all(m.targets for m in ms)
+    assert len({m.altitude_m for m in ms}) == len(ms)
+    assert not safety.validate(ms, pol)
