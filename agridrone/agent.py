@@ -6,7 +6,8 @@ import random
 import time
 import traceback
 
-from . import advisor, fleet, imagery, planner, quality, safety, store, traffic, weather
+from . import advisor, fleet, gps, imagery, planner, quality, safety, store, traffic, weather
+from . import wind as W
 from . import model as M
 from .adapters import SimAdapter
 from .config import load_policy
@@ -30,6 +31,26 @@ def _add(buf, rows, cap):
         buf["pos" if r[3] else "neg"].append([round(r[0], 4), round(r[1], 4), round(r[2], 4), r[3]])
     for k in ("pos", "neg"):
         buf[k] = buf[k][-cap:]
+
+
+def _fates(planned, flown, gps_info):
+    """What really happened to each planned flight (for the dashboard replay): completed, recalled (a drone above lost GPS),
+    gps_lost (landed in place, needs recovery) or cancelled (its drone was already down in a field)."""
+    got = {(m.drone, m.sortie): m for m in flown}
+    lost = {(e["drone"], e["sortie"]) for e in gps_info["events"]}
+    out = {}
+    for m in planned:
+        k = (m.drone, m.sortie)
+        if k in lost:
+            status = "gps_lost"
+        elif k not in got:
+            status = "cancelled"
+        elif len(got[k].targets) < len(m.targets):
+            status = "recalled"
+        else:
+            status = "completed"
+        out[k] = {"status": status, "flown_targets": len(got[k].targets) if k in got else 0}
+    return out
 
 
 def snapshot(farm):
@@ -173,13 +194,37 @@ def run_cycle(policy=None, state_dir=None, now=None):
             )
 
         # --- plan, gate, act ---
-        targets = planner.find_targets(farm, mdl if policy.get("model_enabled", True) else M.StressModel(), thr, forecast, obs)
+        # wind: flights are scheduled in the morning lull; above the limits nothing flies, above the spray limit only irrigation does
+        lim = W.limits(policy)
+        wind = (
+            W.Wind(wx.wind_ms * lim["flight_window_factor"], wx.gust_ms * lim["flight_window_factor"], wx.wind_from_deg)
+            if lim["enabled"]
+            else W.CALM
+        )
+        flight_ok, spray_ok, wind_why = W.go_no_go(wind, policy)
+        spray_deferred = []
+        if flight_ok:
+            targets = planner.find_targets(
+                farm, mdl if policy.get("model_enabled", True) else M.StressModel(), thr, forecast, obs, spray_ok, spray_deferred
+            )
+        else:
+            targets = []
+            audit("grounded_by_wind", reason=wind_why, wind=wind.as_tuple())
+        if flight_ok and not spray_ok and spray_deferred:
+            audit("spray_deferred_by_wind", patches=len(spray_deferred), reason=wind_why)
+        farm.flight_wind = wind.speed  # spray drift loss in the simulator
         # hardware modes plan ONE sortie: a battery swap between sorties needs a human at the aircraft
         sim_mode = policy["autonomy_level"] == "simulation"
         batteries = fleet.Fleet.load(policy, state_dir)
+        batteries.today = farm.day  # drones that landed in a field earlier are grounded until `grounded_until`
         overnight_wh, overnight_h = batteries.overnight()  # every pack is back to full at dawn
         missions = planner.plan(
-            targets, policy, sorties=policy["fleet"].get("sorties_per_day", 1) if sim_mode else 1, allow_hold=sim_mode, fleet=batteries
+            targets,
+            policy,
+            sorties=policy["fleet"].get("sorties_per_day", 1) if sim_mode else 1,
+            allow_hold=sim_mode,
+            fleet=batteries,
+            wind=wind,
         )
         missions, dropped = safety.repair(missions, policy)
         traffic_reps = [  # trimming a route changes its timing: prove the final schedule is conflict-free
@@ -190,11 +235,23 @@ def run_cycle(policy=None, state_dir=None, now=None):
         violations = safety.validate(missions, policy) + energy["violations"]
         level = policy["autonomy_level"]
         executed = 0
+        gps_info = {"events": [], "patches_deferred": 0, "grounded": []}
+        fates = {}
         before = snapshot(farm)  # for the dashboard replay: the field as the drones found it
         if violations:
             audit("safety_block", violations=violations)
         elif level == "simulation":
-            executed = SimAdapter(farm).execute(missions)
+            # GNSS outages: a drone that loses its fix lands in place, drones below it are ordered home, the rest is deferred
+            flown, gps_info = missions, {"events": [], "patches_deferred": 0, "grounded": []}
+            events = gps.sample_losses(missions, policy, farm.seed, farm.day)
+            if events:
+                flown, gps_info = gps.apply_losses(missions, events, policy)
+                for e in gps_info["events"]:
+                    batteries.ground(e["drone"], farm.day + 1 + int(gps.cfg(policy)["recovery_days"]))
+                    audit("gps_loss", **e, patches_deferred=gps_info["patches_deferred"])
+                energy = batteries.simulate(flown)  # truncated flights use less energy: charge what was really flown
+            executed = SimAdapter(farm).execute(flown)
+            fates = _fates(missions, flown, gps_info)
         else:  # supervised / autonomous: cloud only QUEUES; the ground station at the farm flies
             auto = level == "autonomous" and policy["hardware"].get("enabled", False)
             store.append_jsonl(
@@ -212,6 +269,7 @@ def run_cycle(policy=None, state_dir=None, now=None):
                             "t0": m.t0,
                             "hold": m.hold,
                             "pad": m.pad if m.pad >= 0 else m.drone,
+                            "wind": m.wind,
                             "targets": m.targets,
                         }
                         for m in missions
@@ -230,6 +288,14 @@ def run_cycle(policy=None, state_dir=None, now=None):
             "targets": len(targets),
             "executed": executed,
             "sorties": len({m.sortie for m in missions}),
+            "gps_losses": len(gps_info["events"]),
+            "gps_patches_deferred": gps_info["patches_deferred"],
+            "drones_grounded": sum(1 for i in range(batteries.n) if batteries.grounded(i)),
+            "wind_ms": round(wind.speed, 1),
+            "gust_ms": round(wind.gust, 1),
+            "wind_from_deg": round(wind.from_deg),
+            "grounded_by_wind": not flight_ok,
+            "spray_deferred": len(spray_deferred),
             "fleet_energy_wh": energy["used_wh"],
             "charged_between_flights_wh": energy["charged_wh"],
             "overnight_charge_wh": round(overnight_wh),
@@ -268,6 +334,8 @@ def run_cycle(policy=None, state_dir=None, now=None):
                 "size": farm.size,
                 "before": before,
                 "no_fly": policy["no_fly_cells"],
+                "wind": wind.as_tuple(),
+                "gps_events": gps_info["events"],
                 "missions": [
                     {
                         "drone": m.drone,
@@ -278,6 +346,7 @@ def run_cycle(policy=None, state_dir=None, now=None):
                         "hold": m.hold,
                         "pad": m.pad if m.pad >= 0 else m.drone,
                         "soc": next((r for r in energy["drones"].get(m.drone, []) if r["sortie"] == m.sortie), None),
+                        "fate": fates.get((m.drone, m.sortie)),
                         "targets": [[c[0], c[1], a] for c, a in m.targets],
                     }
                     for m in missions

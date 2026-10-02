@@ -49,7 +49,8 @@ class FakeLink:
             raise ConnectionError("link down")
         self.rtl_called = True
 
-    async def ensure_failsafe(self):
+    async def ensure_failsafe(self, wind_limit_ms=None):
+        self.wind_limit = wind_limit_ms
         return not getattr(self, "bad_failsafe", False)
 
     async def connection_lost(self, grace):
@@ -319,3 +320,9 @@ def test_ground_station_roundtrips_the_schedule_and_pad():
     }
     m = to_missions(rec)[0]
     assert (m.t0, m.hold, m.pad, m.drone) == (6, 0, 1, 1)
+
+
+def test_the_autopilot_wind_failsafe_is_armed_at_the_headway_limit():
+    e, _ = ex()
+    asyncio.run(e.fly([mission()]))
+    assert FakeLink.instances[0].wind_limit == 0.75 * e.fleet["speed_ms"]  # 7.5 m/s for a 10 m/s airspeed

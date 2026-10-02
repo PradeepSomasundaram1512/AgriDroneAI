@@ -32,6 +32,13 @@ def test_shipped_policy_is_valid():
         (lambda p: p["fleet"]["charging"].update(rate_w=0), "rate_w"),
         (lambda p: p["fleet"].update(climb_rate_ms=-1), "climb_rate_ms"),
         (lambda p: p["field"].update(location={"lat": 999, "lon": 0}), "imagery.enabled needs field.location"),
+        (lambda p: p["wind"].update(max_flight_ms=9.0), "headway"),
+        (lambda p: p["wind"].update(max_gust_ms=3.0), "max_gust_ms"),
+        (lambda p: p["wind"].update(max_spray_ms=9.0), "max_spray_ms"),
+        (lambda p: p["wind"].update(shear_exponent=2), "shear_exponent"),
+        (lambda p: p["gps"].update(loss_per_flight_hour=-1), "loss_per_flight_hour"),
+        (lambda p: p["gps"].update(grace_s=0), "grace_s"),
+        (lambda p: p["gps"].update(min_sats_preflight=5, min_sats_inflight=8), "satellites"),
     ],
 )
 def test_bad_policy_is_rejected_with_a_clear_message(mutate, needle):

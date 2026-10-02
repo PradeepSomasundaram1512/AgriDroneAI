@@ -14,6 +14,7 @@ import random
 from dataclasses import dataclass, field
 
 from .weather import Weather, synthetic
+from .wind import spray_efficacy
 
 ROOT_ZONE_MM = 300.0
 IRRIGATION_MM = 36.0
@@ -44,6 +45,7 @@ class Farm:
     last_weather: Weather = None
     faults: dict = field(default_factory=dict)  # {cell: {"mode": dead|stuck|bias|spike, "start": day, "val": ...}}
     fault_rng: random.Random = None
+    flight_wind: float = 0.0  # sustained wind during today's flights (m/s): spray drift loss
     init_scene: str = None  # id of the satellite scene that seeded this twin's spatial variability
 
     @classmethod
@@ -151,7 +153,7 @@ class Farm:
             c.moisture = min(THETA_MAX, c.moisture + IRRIGATION_MM / zr)
             self.water_used += IRRIGATION_MM
         elif action == "spray":
-            c.pest *= 0.2
+            c.pest *= 1.0 - 0.8 * spray_efficacy(self.flight_wind)  # 80% kill in calm air, less when the spray drifts
             self.chem_used += 1.0
 
     def blanket_usage(self):

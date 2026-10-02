@@ -3,7 +3,7 @@
 Autonomous precision-agriculture drone network. **Simulation-first, self-operating, and honest about what is proven.**
 
 A scheduled GitHub Actions autopilot runs one operating cycle a day: read sensors → repair bad data → classify crop stress →
-plan multi-drone, multi-flight missions (own pads, 3D collision-checked, rechargeable batteries, no-fly detours) → safety-gate them → act → retrain on drift → audit.
+plan multi-drone, multi-flight missions (own pads, 3D collision-checked, rechargeable batteries, wind-aware, no-fly detours) → safety-gate them → act → retrain on drift → audit.
 State is verified and committed to git, reports are published as issues, incidents open themselves, and a watchdog notices
 if the autopilot goes silent. No person (or Claude session) has to stay online.
 
@@ -23,6 +23,7 @@ PYTHONPATH=. .venv/bin/python scripts/benchmark.py 120 6
 PYTHONPATH=. .venv/bin/python scripts/eval_model.py      # stress model scored against the whole field
 PYTHONPATH=. .venv/bin/python scripts/eval_quality.py    # sensor-fault detector recall/false alarms
 PYTHONPATH=. .venv/bin/python scripts/sweep_charging.py  # what the charger speed costs in yield
+PYTHONPATH=. .venv/bin/python scripts/eval_wind.py       # what wind and GPS loss cost; proves the handling is safe
 PYTHONPATH=. .venv/bin/python -m agridrone.cli imagery fetch && python -m agridrone.cli imagery map   # real Sentinel-2 (needs the 'imagery' extra)
 PYTHONPATH=. .venv/bin/python -m agridrone.cli cycle -n 30 && python -m agridrone.cli dashboard
 ```
@@ -33,7 +34,7 @@ PYTHONPATH=. .venv/bin/python -m agridrone.cli cycle -n 30 && python -m agridron
 - **Simulated:** the farm itself (weather is synthetic or live from Open-Meteo), ground sensors and the crop (the satellite panel is real data of a real field, but there is no ground truth to score the classifier on). Yield/water/spray numbers are
   **simulator outputs, not field results**. A hardware pilot is required before any real-world claim.
 - **Not built:** real sprayer/valve driver (stub), cloud deployment (needs your credentials and spend),
-  regulatory approval, wind/GPS-loss handling, obstacle avoidance.
+  regulatory approval, obstacle avoidance (trees, wires) and GNSS spoofing/jamming detection. Wind *physics* is validated by tests and the model, not in PX4 SITL (no wind source there); GPS loss is tested on real PX4 SITL.
 
 Docs: [Architecture](docs/ARCHITECTURE.md) · [Governance & incident response](docs/GOVERNANCE.md) · [Ground station](docs/GROUND_STATION.md) · [Changelog](CHANGELOG.md) · [Security](SECURITY.md)
 Optional: add repo secret `ANTHROPIC_API_KEY` to enable the bounded Claude advisor (it can only nudge thresholds within hard limits).

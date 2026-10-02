@@ -13,25 +13,33 @@ its own pad (spaced apart), and this module
 import math
 from itertools import combinations
 
+from . import wind as W
+
 DEFAULTS = {
-    "speed_ms": 5.0,
+    "speed_ms": 10.0,
     "climb_rate_ms": 3.0,
     "descent_rate_ms": 2.0,
     "dwell_s": 4.0,
     "horizontal_clearance_m": 20.0,
     "pad_spacing_m": 40.0,
 }
+MIN_GS = 0.25  # fraction of airspeed assumed if a leg is (wrongly) infeasible; the gate rejects such legs anyway
 STEP_S = 1.0  # replay time step; a drone moves <= 5 m per step, far below the 20 m clearance
 MOVE_S = 6  # how much each scheduling move delays a drone
 MAX_ITER = 80
 TURNAROUND_PAD_S = 3.0
 
 
-def cfg(policy):
+def cfg(policy, wind=None):
+    """Traffic parameters. `wind` (wind.Wind) widens the required horizontal clearance by the GNSS error budget plus a
+    gust allowance, and slows/speeds legs by the wind triangle."""
     f = policy["fleet"]
     c = {k: float(f.get(k, v)) for k, v in DEFAULTS.items()}
     c["vertical_clearance_m"] = float(f["min_separation_m"])
     c["cell_m"] = float(policy["field"]["cell_m"])
+    c["shear"] = W.limits(policy)["shear_exponent"]
+    c["wind"] = wind
+    c["horizontal_clearance_m"] += W.clearance_margin(wind or W.CALM, policy)
     return c
 
 
@@ -48,10 +56,16 @@ def _segments(m, c):
     nt = t + alt / c["climb_rate_ms"]
     segs.append((t, nt, (px, py, 0.0), (px, py, alt)))
     t, cur = nt, (px, py, alt)
+    wvec = c["wind"].vector(alt, c["shear"]) if c["wind"] is not None else (0.0, 0.0)
+
+    def leg_time(a, b):
+        d = math.hypot(b[0] - a[0], b[1] - a[1])
+        gs = W.ground_speed(b[0] - a[0], b[1] - a[1], c["speed_ms"], wvec)
+        return d / (gs if gs else MIN_GS * c["speed_ms"])
+
     for cell, action in m.targets:
         nxt = (cell[0] * c["cell_m"], cell[1] * c["cell_m"], alt)
-        d = math.hypot(nxt[0] - cur[0], nxt[1] - cur[1])
-        nt = t + d / c["speed_ms"]
+        nt = t + leg_time(cur, nxt)
         segs.append((t, nt, cur, nxt))
         t, cur = nt, nxt
         if action != "via":
@@ -59,8 +73,7 @@ def _segments(m, c):
             segs.append((t, nt, cur, cur))
             t = nt
     home = (px, py, alt)
-    d = math.hypot(home[0] - cur[0], home[1] - cur[1])
-    nt = t + d / c["speed_ms"]
+    nt = t + leg_time(cur, home)
     segs.append((t, nt, cur, home))
     t = nt
     if m.hold:
@@ -71,8 +84,14 @@ def _segments(m, c):
     return segs, nt
 
 
+def _cfg_for(missions, policy):
+    """All drones of a sortie share the same sky, so they share the same wind."""
+    w = next((m.wind for m in missions if getattr(m, "wind", None)), None)
+    return cfg(policy, W.Wind.from_tuple(w) if w else None)
+
+
 def duration(m, policy):
-    return _segments(m, cfg(policy))[1]
+    return _segments(m, _cfg_for([m], policy))[1]
 
 
 def _pos(segs, t):
@@ -91,7 +110,7 @@ def check(missions, policy, max_report=5):
     """Replay all missions of ONE sortie (they fly concurrently). -> {conflicts, steps, min_ratio, closest}.
     A conflict = horizontal distance < clearance AND vertical distance < clearance at the same instant.
     min_ratio = smallest max(h/H, v/V) over time (>= 1.0 means every moment was at least as safe as required)."""
-    c = cfg(policy)
+    c = _cfg_for(missions, policy)
     ms = [m for m in missions if m.targets]
     built = [_segments(m, c) for m in ms]
     end = max((b[1] for b in built), default=0.0)
@@ -101,6 +120,8 @@ def check(missions, policy, max_report=5):
     while t <= end + STEP_S:
         pos = [_pos(b[0], min(t, b[1])) for b in built]
         for (i, a), (j, b) in combinations(enumerate(pos), 2):
+            if a[2] < 1.0 or b[2] < 1.0:  # a drone parked on its pad is not in the air: pads are separated by geometry
+                continue
             h, v = math.hypot(a[0] - b[0], a[1] - b[1]), abs(a[2] - b[2])
             ratio = max(h / H, v / V)
             if ratio < best[0]:
@@ -149,7 +170,7 @@ def schedule(missions, policy, allow_hold=True):
     mode = "concurrent"
     if rep["steps"]:  # no safe overlap found: fly one drone at a time. Zero temporal overlap, so safe by construction.
         mode, t = "serialized", 0
-        c = cfg(policy)
+        c = _cfg_for(ms, policy)
         for m in sorted(ms, key=lambda x: x.drone):
             m.t0, m.hold = int(t), 0
             t += _segments(m, c)[1] - m.t0 + TURNAROUND_PAD_S

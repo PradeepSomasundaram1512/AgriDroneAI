@@ -14,7 +14,8 @@ import os
 import re
 from dataclasses import dataclass, field
 
-from . import safety
+from . import gps, safety
+from . import wind as W
 from .geo import cell_to_latlon
 
 
@@ -108,14 +109,25 @@ class MavsdkLink:
     async def rtl(self):
         await self.sys.action.return_to_launch()
 
-    async def ensure_failsafe(self):
-        """Autopilot-side data-link-loss failsafe must be RETURN (the ground station cannot command RTL once the link
-        is gone). PX4: NAV_DLL_ACT 2 = return. Set, then read back to verify."""
+    async def ensure_failsafe(self, wind_limit_ms=None):
+        """Autopilot-side safety nets must be on, because the ground station cannot command anything once the link is gone.
+        Link loss: NAV_DLL_ACT = 2 (return), verified by read-back (REFUSE to fly if it cannot be set).
+        Wind: PX4's own wind failsafe is DISABLED by default (COM_WIND_MAX = -1). Arm it at the wind where the drone can no longer
+        make headway (warn earlier, return-to-launch at the limit). Defense in depth: best effort, a missing parameter is logged."""
         try:
             await self.sys.param.set_param_int("NAV_DLL_ACT", 2)
-            return await self.sys.param.get_param_int("NAV_DLL_ACT") == 2
+            if await self.sys.param.get_param_int("NAV_DLL_ACT") != 2:
+                return False
         except Exception:
             return False
+        if wind_limit_ms:
+            try:
+                await self.sys.param.set_param_float("COM_WIND_WARN", float(0.8 * wind_limit_ms))
+                await self.sys.param.set_param_float("COM_WIND_MAX", float(wind_limit_ms))
+                await self.sys.param.set_param_int("COM_WIND_MAX_ACT", 3)  # 3 = return to launch
+            except Exception as e:
+                log.warning("could not arm the autopilot wind failsafe (planner limits still apply): %r", e)
+        return True
 
     async def connection_lost(self, grace_s):
         """Returns once the vehicle link has been down for grace_s seconds."""
@@ -137,6 +149,21 @@ class MavsdkLink:
         except TimeoutError:
             return False
 
+    async def gps_state(self):
+        """(fix_type, satellites): fix 3 = 3D fix, 4+ = DGPS/RTK."""
+        async for g in self.sys.telemetry.gps_info():
+            return (int(g.fix_type.value), int(g.num_satellites))
+        return (None, None)
+
+    async def hold(self):
+        await self.sys.action.hold()
+
+    async def land(self):
+        await self.sys.action.land()
+
+    async def resume(self):
+        await self.sys.mission.start_mission()
+
     async def wait_landed(self, timeout):
         async def wait():
             async for in_air in self.sys.telemetry.in_air():
@@ -151,9 +178,11 @@ class MavsdkLink:
 
 
 class FlightExecutor:
-    def __init__(self, policy, link_factory=MavsdkLink, payload=None):
+    def __init__(self, policy, link_factory=MavsdkLink, payload=None, wind_provider=None):
         self.policy, self.hw, self.fleet = policy, policy["hardware"], policy["fleet"]
         self.link_factory, self.payload = link_factory, payload or NullPayload()
+        self.wind_provider = wind_provider  # optional: returns the MEASURED wind.Wind at the field (anemometer / weather station)
+        self._emergency = {}  # drone -> altitude of every drone in distress right now (shared by all flights of one fly())
 
     # --- pure planning, no I/O ---
     def waypoints(self, mission):
@@ -164,6 +193,12 @@ class FlightExecutor:
             raise PreflightError("hardware.enabled is false in policy")
         if os.environ.get("AGRIDRONE_ARMED") != "1":
             raise PreflightError("physical interlock: AGRIDRONE_ARMED=1 not set on this ground station")
+        if self.wind_provider is not None:
+            now = self.wind_provider()
+            if now is not None:
+                ok, _, why = W.go_no_go(now, self.policy)
+                if not ok:
+                    raise PreflightError(f"measured wind at the field: {why}")
         if any(m.hold for m in missions):
             raise PreflightError("pre-landing holds cannot be flown on hardware (the return-to-launch timing cannot be delayed)")
         v = safety.validate(missions, self.policy)
@@ -191,12 +226,17 @@ class FlightExecutor:
             log.info("drone %s: connected, waiting for GPS/home lock", mission.drone)
             if not await link.ready():
                 return FlightResult(mission.drone, "refused", 0, total, "no GPS/home lock")
+            if hasattr(link, "gps_state"):
+                fix, sats = await link.gps_state()
+                ok, why = gps.preflight_ok(sats, fix, self.policy)
+                if not ok:
+                    return FlightResult(mission.drone, "refused", 0, total, f"GPS not good enough to fly: {why}")
             pct = await link.battery_pct()
             log.info("drone %s: lock ok, battery %s%%", mission.drone, pct)
             need = mission.energy_wh / self.fleet["battery_wh"] * 100 + reserve
             if pct is None or pct < need:
                 return FlightResult(mission.drone, "refused", 0, total, f"battery {pct}% < required {need:.0f}%")
-            if hasattr(link, "ensure_failsafe") and not await link.ensure_failsafe():
+            if hasattr(link, "ensure_failsafe") and not await link.ensure_failsafe(0.75 * self.fleet.get("speed_ms", 10.0)):
                 return FlightResult(mission.drone, "refused", 0, total, "could not set/verify autopilot link-loss failsafe (RTL)")
             await link.upload(wps, self.hw.get("speed_m_s", 5.0), self.hw.get("dwell_s", 4))
             log.info("drone %s: mission uploaded (%d waypoints), arming + starting", mission.drone, total)
@@ -229,31 +269,91 @@ class FlightExecutor:
             )
 
     async def _watched(self, link, mission, total, reserve):
-        """Run the monitor while watching the vehicle link; on loss, try RTL and report honestly."""
-        state = {"reached": 0}
+        """Run the monitor while watching battery, GPS and the vehicle link; whichever guard fires first decides the outcome."""
+        state = {"reached": 0, "gps_ok": True}
         mon = asyncio.ensure_future(self._monitor(link, mission, total, reserve, state))
         guard = asyncio.ensure_future(self._battery_guard(link, mission, total, reserve, state))
+        gps_task = asyncio.ensure_future(self._gps_guard(link, mission, total, state)) if hasattr(link, "gps_state") else None
         lost = (
             asyncio.ensure_future(link.connection_lost(self.hw.get("link_loss_grace_s", 3))) if hasattr(link, "connection_lost") else None
         )
+        tasks = [t for t in (mon, guard, gps_task, lost) if t]
         try:
-            await asyncio.wait([t for t in (mon, guard, lost) if t], return_when=asyncio.FIRST_COMPLETED)
+            await asyncio.wait(tasks, return_when=asyncio.FIRST_COMPLETED)
             if mon.done():
                 return mon.result()
-            if guard.done() and not guard.cancelled() and guard.exception() is None:
-                mon.cancel()
-                return guard.result()
+            for g in (guard, gps_task):
+                if g is not None and g.done() and not g.cancelled() and g.exception() is None and g.result() is not None:
+                    mon.cancel()
+                    return g.result()
             mon.cancel()
             sent = await self._abort(link)
             how = "RTL commanded" if sent else "RTL could NOT be sent; relying on autopilot link-loss failsafe"
             log.error("drone %s: LINK LOST in flight; %s", mission.drone, how)
             return FlightResult(mission.drone, "aborted", state["reached"], total, f"link lost; {how}")
         finally:
-            for t in (mon, guard, lost):
-                if t and not t.done():
+            for t in tasks:
+                if not t.done():
                     t.cancel()
-                elif t and not t.cancelled():
+                elif not t.cancelled():
                     t.exception()  # retrieve so a dead link stream does not log "never retrieved"
+
+    async def _gps_guard(self, link, mission, total, state):
+        """GNSS loss protocol (see gps.py): freeze the payload, hold for a grace period, resume if the fix returns, otherwise land in
+        place; and protect the others: a drone BELOW one in distress is ordered home (they still have GPS, so RTL works)."""
+        c = gps.cfg(self.policy)
+        poll, bad_since = c["poll_s"], None
+        try:
+            while True:
+                await asyncio.sleep(poll)
+                if gps.must_return(mission.altitude_m, [a for d, a in self._emergency.items() if d != mission.drone]):
+                    above = max(self._emergency.values())
+                    sent = await self._abort(link)
+                    log.error("drone %s: a drone above (%s m) lost GPS; returning home", mission.drone, above)
+                    return FlightResult(
+                        mission.drone,
+                        "aborted",
+                        state["reached"],
+                        total,
+                        "peer GPS emergency on a higher layer; " + ("RTL commanded" if sent else "RTL could NOT be sent"),
+                    )
+                fix, sats = await asyncio.wait_for(link.gps_state(), self.hw.get("telemetry_timeout_s", 6))
+                if gps.inflight_ok(sats, fix, self.policy):
+                    if bad_since is not None:
+                        log.warning("drone %s: GPS fix restored (%s sats); resuming the mission", mission.drone, sats)
+                        await self._try(link, "resume")
+                        bad_since, state["gps_ok"] = None, True
+                    continue
+                state["gps_ok"] = False  # never spray or water blind
+                if bad_since is None:
+                    bad_since = asyncio.get_event_loop().time()
+                    log.error("drone %s: GPS degraded (fix %s, %s sats); payload frozen, holding", mission.drone, fix, sats)
+                    await self._try(link, "hold")
+                if asyncio.get_event_loop().time() - bad_since >= c["grace_s"]:
+                    self._emergency[mission.drone] = mission.altitude_m
+                    log.error("drone %s: GPS not restored after %.0fs; LANDING IN PLACE", mission.drone, c["grace_s"])
+                    landed = await self._try(link, "land")
+                    return FlightResult(
+                        mission.drone,
+                        "gps_lost",
+                        state["reached"],
+                        total,
+                        "GPS lost: landed in place"
+                        + ("" if landed else " (LAND command failed; autopilot failsafe)")
+                        + "; payload frozen; the drone needs recovery",
+                    )
+        except Exception as e:  # a broken GPS watcher must not take the flight down with it
+            log.warning("drone %s: GPS watcher stopped: %r", mission.drone, e)
+            await asyncio.Event().wait()
+
+    async def _try(self, link, name):
+        """Best-effort vehicle command (time-bounded, never raises)."""
+        try:
+            await asyncio.wait_for(getattr(link, name)(), self.hw.get("rtl_timeout_s", 5))
+            return True
+        except Exception as e:
+            log.warning("command %s failed: %r", name, e)
+            return False
 
     async def _battery_guard(self, link, mission, total, reserve, state):
         """Battery is polled on its own timer: waypoint-progress events can be tens of seconds apart (found in SITL:
@@ -286,7 +386,7 @@ class FlightExecutor:
                 )
 
     async def _monitor(self, link, mission, total, reserve, state=None):
-        state = state if state is not None else {"reached": 0}
+        state = state if state is not None else {"reached": 0, "gps_ok": True}
         reached = 0
         async for cur, tot in link.progress():
             if tot != total:  # stale event from a different mission
@@ -294,7 +394,10 @@ class FlightExecutor:
                 continue
             while reached < min(cur, total):  # waypoint `reached` was just completed
                 if mission.targets[reached][1] != "via":  # detour waypoints do not trigger the sprayer/valve
-                    await self.payload.trigger(*reversed(mission.targets[reached]))
+                    if state.get("gps_ok", True):
+                        await self.payload.trigger(*reversed(mission.targets[reached]))
+                    else:  # position is not trustworthy: never spray or water blind
+                        log.warning("drone %s: skipped treatment at waypoint %s (no GPS)", mission.drone, reached)
                 reached += 1
                 state["reached"] = reached
             pct = await link.battery_pct()
@@ -304,7 +407,7 @@ class FlightExecutor:
             if cur >= tot:
                 break
         while reached < total:
-            if mission.targets[reached][1] != "via":
+            if mission.targets[reached][1] != "via" and state.get("gps_ok", True):
                 await self.payload.trigger(*reversed(mission.targets[reached]))
             reached += 1
         return FlightResult(mission.drone, "completed", reached, total)
@@ -321,6 +424,7 @@ class FlightExecutor:
     async def fly(self, missions, dry_run=False):
         if not dry_run:
             self.preflight_policy(missions)
+        self._emergency = {}
         return await asyncio.gather(*[self._staggered(m, dry_run) for m in missions])
 
     async def _staggered(self, m, dry_run):

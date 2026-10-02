@@ -46,3 +46,8 @@ Run the unattended daemon with a git credential that can push to this repo (depl
 - Battery: the preflight reads the real battery from telemetry and refuses a drone that cannot cover its mission plus the reserve; the planner's modelled charge is a plan, not a measurement.
 
 Re-verified on PX4 SITL after adding deconfliction (`scripts/sitl_multi.sh all 3`): the scheduler assigned launch delays of 6 s and 3 s, the executor held those drones on their pads, and all three drones completed 2/2.
+
+## Wind and GPS on hardware
+- **Pre-flight**: 3D fix + >= `gps.min_sats_preflight` satellites; measured wind (optional `wind_provider`) within limits; the plan's own wind within limits (the gate re-checks it); autopilot link-loss failsafe (`NAV_DLL_ACT`) and wind failsafe (`COM_WIND_MAX`/`COM_WIND_MAX_ACT`) set and read back.
+- **In flight**: battery, link and GPS are watched independently; whichever fires first decides the outcome. GPS loss -> payload frozen, hold, land in place after `gps.grace_s`, lower drones ordered home. Result status `gps_lost` (needs recovery).
+- Verified on PX4 SITL: pre-flight refusal with 6 satellites, a 4 s dropout (resume, 4/4), a permanent loss (landing in place); wind-failsafe parameters armed and read back. Wind physics cannot be simulated in this SITL setup.

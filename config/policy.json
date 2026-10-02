@@ -20,7 +20,7 @@
     "min_reserve_pct": 25,
     "min_separation_m": 15,
     "sorties_per_day": 3,
-    "speed_ms": 5.0,
+    "speed_ms": 10.0,
     "climb_rate_ms": 3.0,
     "descent_rate_ms": 2.0,
     "dwell_s": 4.0,
@@ -95,5 +95,24 @@
     "lookback_days": 60,
     "_note": "enabled: the autopilot refreshes Sentinel-2 imagery when the cache is >max_age_days old (needs the 'imagery' extra and network).",
     "init_field": true
+  },
+  "wind": {
+    "max_flight_ms": 6.0,
+    "max_gust_ms": 10.0,
+    "max_spray_ms": 4.5,
+    "shear_exponent": 0.2,
+    "gust_margin_m_per_ms": 0.5,
+    "gps_error_m": 3.0,
+    "flight_window_factor": 0.75,
+    "_note": "Wind at 10 m. A drone cruising at 10 m/s airspeed makes headway only if the wind at its altitude stays below ~7.5 m/s, so max_flight_ms must stay below that / the 30 m shear factor (1.24). Higher layers see more wind and drop out first."
+  },
+  "gps": {
+    "loss_per_flight_hour": 0.02,
+    "recovery_days": 1,
+    "min_sats_preflight": 10,
+    "min_sats_inflight": 6,
+    "grace_s": 10,
+    "poll_s": 1,
+    "_note": "loss_per_flight_hour drives GNSS outages in the SIMULATOR (0.02 is deliberately pessimistic). On hardware, outages are detected from telemetry: hold, then land in place after grace_s; drones on lower layers return home."
   }
 }

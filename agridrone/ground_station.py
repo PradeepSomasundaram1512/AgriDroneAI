@@ -22,6 +22,7 @@ def to_missions(rec):
             m.get("t0", 0),
             m.get("hold", 0),
             m.get("pad", -1),
+            tuple(m["wind"]) if m.get("wind") else None,
         )
         for m in rec["missions"]
     ]

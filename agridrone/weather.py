@@ -19,6 +19,9 @@ class Weather:
     tmin: float
     et0_mm: float  # reference evapotranspiration (FAO-56)
     source: str = "synthetic"
+    wind_ms: float = 0.0  # sustained wind at 10 m
+    gust_ms: float = 0.0
+    wind_from_deg: float = 270.0  # meteorological: the direction the wind blows FROM
 
     @property
     def tmean(self):
@@ -37,14 +40,34 @@ def synthetic(day: int, seed: int = 0, start_doy: int = 120) -> Weather:
     rain = r.expovariate(1 / 11.0) if wet else 0.0
     tmax, tmin = tmean + rng_t / 2, tmean - rng_t / 2
     et0 = max(0.5, 0.0023 * (tmean + 17.8) * math.sqrt(max(rng_t, 1)) * 14.5 * (0.6 + 0.4 * season) / 2.45 * 2.2)
-    return Weather(round(rain, 1), round(tmax, 1), round(tmin, 1), round(min(et0, 8.0), 2), "synthetic")
+    # wind comes from its OWN random stream, so adding it did not change a single rain/temperature/ET value
+    rw = random.Random(seed * 7919 + day * 31 + 5)
+    speed = rw.weibullvariate(4.3, 2.0) * (1.25 if wet else 1.0) * (1.0 + 0.15 * (1 - season))
+    gust = speed * (1.35 + 0.35 * rw.random())
+    from_deg = (270 + 60 * math.sin(day / 9.0) + rw.gauss(0, 25)) % 360
+    return Weather(
+        round(rain, 1),
+        round(tmax, 1),
+        round(tmin, 1),
+        round(min(et0, 8.0), 2),
+        "synthetic",
+        round(speed, 1),
+        round(gust, 1),
+        round(from_deg) % 360,
+    )
+
+
+def _col(d, key, i, default=0.0):
+    v = (d.get(key) or [])[i : i + 1]
+    return default if not v or v[0] is None else float(v[0])
 
 
 def _fetch_open_meteo(lat, lon, day0: date, past_days=2, forecast_days=4, timeout=10):
     lat, lon = float(lat), float(lon)
     url = (
         f"https://api.open-meteo.com/v1/forecast?latitude={lat}&longitude={lon}&timezone=auto&past_days={past_days}&forecast_days={forecast_days}"
-        "&daily=precipitation_sum,temperature_2m_max,temperature_2m_min,et0_fao_evapotranspiration"
+        "&wind_speed_unit=ms&daily=precipitation_sum,temperature_2m_max,temperature_2m_min,et0_fao_evapotranspiration,"
+        "wind_speed_10m_max,wind_gusts_10m_max,wind_direction_10m_dominant"
     )
     # fixed https URL; lat/lon are coerced to float above, so config values cannot inject anything into it
     with urllib.request.urlopen(url, timeout=timeout) as r:  # nosec B310
@@ -56,6 +79,9 @@ def _fetch_open_meteo(lat, lon, day0: date, past_days=2, forecast_days=4, timeou
             d["temperature_2m_min"][i],
             d["et0_fao_evapotranspiration"][i] or 0.0,
             "open-meteo",
+            _col(d, "wind_speed_10m_max", i),  # the daily MAX is conservative for go/no-go and energy planning
+            _col(d, "wind_gusts_10m_max", i),
+            _col(d, "wind_direction_10m_dominant", i, 270.0),
         )
         for i, t in enumerate(d["time"])
     }

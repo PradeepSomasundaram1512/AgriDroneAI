@@ -39,3 +39,9 @@ The agent never edits `policy.json`. It may only nudge thresholds inside hard bo
 - **Real satellite data** is refreshed by the autopilot only when stale (default 5 days), never blocks a cycle, and is clearly labelled real vs simulated everywhere.
 - New policy knobs are validated: `fleet.charging.*`, `fleet.pad_spacing_m` (>= 1.5x clearance), speeds, `imagery.*`, `field.location`.
 - `state/fleet.json` (battery state) is integrity-checked before every commit.
+
+## Added in 0.4.0
+- **Wind is part of the safety gate**: the gate recomputes each mission's energy for the wind it was planned for, rejects plans above the flight limit, rejects spraying above the drift limit, and widens traffic clearance in gusts. Wind limits are validated against the aircraft's airspeed.
+- **GPS loss has a fixed protocol** (freeze payload, hold, land in place, send lower drones home); grounded drones are tracked in `state/fleet.json` (`grounded_until`, `incidents`) and checked by `verify`.
+- The audit log records `grounded_by_wind`, `spray_deferred_by_wind` and `gps_loss`, shown in plain language on the dashboard.
+- Hardware: PX4's wind failsafe is armed (it is off by default); measured wind above the limit refuses the flight.

@@ -10,7 +10,7 @@ from agridrone.safety import Mission
 
 def pol(**fleet):
     p = load_policy()
-    p["fleet"].update(fleet)
+    p["fleet"].update({"speed_ms": 5.0, **fleet})  # the adversarial scenarios below are timed for a 5 m/s cruise
     return p
 
 
@@ -22,7 +22,7 @@ def crossing():
 def test_a_cruising_drone_over_a_climbing_drones_pad_is_a_detected_conflict():
     ms = crossing()
     rep = traffic.check(ms, pol())
-    assert rep["steps"] > 0 and rep["conflicts"][0]["horizontal_m"] < 20 and rep["conflicts"][0]["vertical_m"] <= 15
+    assert rep["steps"] > 0 and rep["conflicts"][0]["horizontal_m"] < 23 and rep["conflicts"][0]["vertical_m"] <= 15
 
 
 def test_scheduler_removes_the_conflict_and_the_gate_agrees():

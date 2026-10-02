@@ -26,6 +26,7 @@ class Fleet:
         f = policy["fleet"]
         self.n, self.nominal, self.res = f["drones"], float(f["battery_wh"]), f["min_reserve_pct"] / 100.0
         self.chg = charging(policy)
+        self.today = 0  # set by the agent: grounded drones come back on their `grounded_until` day
         self.d = drones or [{"soc_wh": self.nominal, "cycles": 0.0, "health": 1.0} for _ in range(self.n)]
         while len(self.d) < self.n:  # fleet grew
             self.d.append({"soc_wh": self.nominal, "cycles": 0.0, "health": 1.0})
@@ -66,9 +67,19 @@ class Fleet:
             return self.cap(i)
         return min(self.cap(i), soc + self.chg["rate_w"] * self.gap_h())
 
+    def grounded(self, i):
+        """True while the drone is sitting in the field after an emergency landing, waiting to be recovered."""
+        return self.today < self.d[i].get("grounded_until", 0)
+
+    def ground(self, i, until_day):
+        self.d[i]["grounded_until"] = max(self.d[i].get("grounded_until", 0), until_day)
+        self.d[i]["incidents"] = self.d[i].get("incidents", 0) + 1
+
     def budget(self, i, s):
         """Usable energy (Wh above the safety reserve) drone i can spend on sortie s. For s>0 it conservatively assumes
         the previous sortie ended exactly at the reserve, so the plan stays feasible whatever the earlier flights used."""
+        if self.grounded(i):
+            return 0.0  # it is in a field somewhere: nothing to plan for it today
         if s == 0:
             return max(0.0, self.d[i]["soc_wh"] - self.reserve(i))
         return max(0.0, self.refill(i, self.reserve(i)) - self.reserve(i))

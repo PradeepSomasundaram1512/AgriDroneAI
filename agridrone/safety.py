@@ -5,7 +5,7 @@ cross a no-fly zone on its way to a legal target), vertical separation between d
 
 from dataclasses import dataclass, field
 
-from . import traffic
+from . import traffic, wind as W
 
 PAD = 0.3  # lateral safety margin around a no-fly cell, in cell widths
 
@@ -20,16 +20,22 @@ class Mission:
     t0: int = 0  # launch delay within the sortie (s), set by traffic.schedule
     hold: int = 0  # loiter above the pad before descending (s), set by traffic.schedule
     pad: int = -1  # launch pad index (default: the drone's own index)
+    wind: tuple = None  # (speed, gust, from_deg) at 10 m that this plan was made for; the gate re-checks against it
 
 
-def mission_energy(start, targets, fleet):
+def mission_energy(start, targets, fleet, wind=None, altitude=30.0, shear=0.2):
+    """Energy (Wh) of a route. With `wind` (wind.Wind at 10 m) each leg is scaled by airspeed / ground speed at the flight
+    altitude, so headwinds cost more and tailwinds less; returns inf if any leg cannot make headway."""
+    wvec = wind.vector(altitude, shear) if wind is not None else (0.0, 0.0)
+    air = float(fleet.get("speed_ms", 10.0))
     e, cur = 0.0, start
-    for cell, action in targets:
-        e += (abs(cell[0] - cur[0]) + abs(cell[1] - cur[1])) * fleet["wh_per_cell_move"] + (
-            0.0 if action == "via" else fleet["wh_per_cell_action"]
-        )
+    for cell, action in [*targets, (start, "via")]:  # the last item is the return leg
+        dx, dy = cell[0] - cur[0], cell[1] - cur[1]
+        f = W.leg_factor(dx, dy, air, wvec)
+        if f is None:
+            return float("inf")
+        e += (abs(dx) + abs(dy)) * fleet["wh_per_cell_move"] * f + (0.0 if action == "via" else fleet["wh_per_cell_action"])
         cur = cell
-    e += (abs(cur[0] - start[0]) + abs(cur[1] - start[1])) * fleet["wh_per_cell_move"]  # return leg
     return e
 
 
@@ -106,8 +112,18 @@ def validate(missions, policy):
                 f"({c['horizontal_m']} m apart sideways, {c['vertical_m']} m vertically)"
             )
     for m in missions:
-        if m.energy_wh > usable:
-            v.append(f"drone {m.drone} energy {m.energy_wh:.1f}Wh exceeds usable {usable:.1f}Wh")
+        wind = W.Wind.from_tuple(m.wind)
+        shear = W.limits(policy)["shear_exponent"]
+        # the gate does not trust the planner's number: it recomputes energy for THIS wind at THIS drone's altitude
+        energy = mission_energy((0, 0), m.targets, fleet, wind.design() if m.wind else None, m.altitude_m, shear)
+        if energy == float("inf"):
+            v.append(f"drone {m.drone}: a leg cannot make headway in this wind at {m.altitude_m} m")
+        elif energy > usable:
+            v.append(f"drone {m.drone} energy {energy:.1f}Wh exceeds usable {usable:.1f}Wh")
+        if m.wind:
+            flight_ok, spray_ok, why = W.go_no_go(wind, policy)
+            if not flight_ok or (not spray_ok and any(a == "spray" for _, a in m.targets)):
+                v.append(f"drone {m.drone}: {why}")
         pts = [(0, 0)] + [tuple(c) for c, _ in m.targets] + [(0, 0)]
         for cell, _ in m.targets:
             if tuple(cell) in nofly:
@@ -127,8 +143,9 @@ def repair(missions, policy):
         keep = [t for t in m.targets if tuple(t[0]) not in nofly]
         dropped += len(m.targets) - len(keep)
         m.targets = keep
-        while m.targets and mission_energy((0, 0), m.targets, fleet) > usable:
+        wind = W.Wind.from_tuple(m.wind).design() if m.wind else None  # energy is planned against the DESIGN wind (gust margin)
+        while m.targets and mission_energy((0, 0), m.targets, fleet, wind, m.altitude_m) > usable:
             m.targets.pop()
             dropped += 1
-        m.energy_wh = mission_energy((0, 0), m.targets, fleet) if m.targets else 0.0
+        m.energy_wh = mission_energy((0, 0), m.targets, fleet, wind, m.altitude_m) if m.targets else 0.0
     return [m for m in missions if m.targets], dropped

@@ -56,6 +56,33 @@ def validate_policy(p: dict) -> dict:
     need(num(ch.get("rate_w", 90)) and ch.get("rate_w", 90) > 0, "fleet.charging.rate_w must be > 0")
     need(num(ch.get("turnaround_min", 45)) and ch.get("turnaround_min", 45) >= 1, "fleet.charging.turnaround_min must be >= 1")
     need(num(ch.get("swap_min", 3)) and ch.get("swap_min", 3) >= 0, "fleet.charging.swap_min must be >= 0")
+    wl = {
+        **{"max_flight_ms": 6.0, "max_gust_ms": 10.0, "max_spray_ms": 4.5, "shear_exponent": 0.2, "flight_window_factor": 0.75},
+        **p.get("wind", {}),
+    }
+    need(
+        num(wl["max_flight_ms"]) and wl["max_flight_ms"] > 0 and num(wl["max_gust_ms"]) and wl["max_gust_ms"] >= wl["max_flight_ms"],
+        "wind.max_gust_ms must be >= wind.max_flight_ms > 0",
+    )
+    need(num(wl["max_spray_ms"]) and 0 < wl["max_spray_ms"] <= wl["max_flight_ms"], "wind.max_spray_ms must be in (0, max_flight_ms]")
+    need(num(wl["shear_exponent"]) and 0 <= wl["shear_exponent"] <= 0.5, "wind.shear_exponent must be in 0..0.5")
+    need(num(wl["flight_window_factor"]) and 0.3 <= wl["flight_window_factor"] <= 1.0, "wind.flight_window_factor must be in 0.3..1.0")
+    air = fl.get("speed_ms", 10.0)
+    if num(air) and num(wl["max_flight_ms"]) and num(wl["shear_exponent"]):
+        aloft = wl["max_flight_ms"] * (30.0 / 10.0) ** wl["shear_exponent"]  # wind at the lowest flight layer when exactly at the limit
+        need(
+            aloft <= 0.75 * air + 1e-9,
+            f"wind.max_flight_ms {wl['max_flight_ms']} m/s means {aloft:.1f} m/s at 30 m, but a drone cruising at {air} m/s "
+            f"only makes headway below {0.75 * air:.1f} m/s: lower the wind limit or raise fleet.speed_ms",
+        )
+    gp = p.get("gps", {})
+    need(num(gp.get("loss_per_flight_hour", 0)) and 0 <= gp.get("loss_per_flight_hour", 0) <= 5, "gps.loss_per_flight_hour must be in 0..5")
+    need(isinstance(gp.get("recovery_days", 1), int) and gp.get("recovery_days", 1) >= 0, "gps.recovery_days must be an integer >= 0")
+    need(num(gp.get("grace_s", 10)) and gp.get("grace_s", 10) >= 1, "gps.grace_s must be >= 1 second")
+    need(
+        isinstance(gp.get("min_sats_preflight", 10), int) and gp.get("min_sats_preflight", 10) >= gp.get("min_sats_inflight", 6) >= 4,
+        "gps satellites: min_sats_preflight must be >= min_sats_inflight >= 4",
+    )
     im = p.get("imagery", {})
     if im.get("enabled"):
         loc = f.get("location", {})

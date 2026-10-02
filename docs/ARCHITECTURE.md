@@ -145,3 +145,53 @@ Verified on live data (`AGRIDRONE_LIVE=1 pytest tests/test_imagery.py -k live`):
 a believable late-season decline, 100% of the field clear in every kept scene.
 **Limits:** satellite NDVI is a ~10 m average and may be days old; there is no ground truth for real pixels, so the stress *classifier* is not trained or scored on real
 imagery (the zone/scouting analysis is unsupervised); cloud masking depends on Sentinel-2's SCL layer; the default field location is an Iowa row-crop area for demonstration; set your own.
+
+
+## Wind
+`wind.py` is the single implementation of what wind does to a flight; the planner, the safety gate, the traffic checker and the ground station all use it, so they cannot disagree.
+- **Energy and time per leg** from the wind triangle: at fixed airspeed `a`, ground speed is `sqrt(a^2 - crosswind^2) + tailwind`, and energy (constant power x time) scales by `a / gs`.
+  Headwind legs cost more, tailwind legs less; a leg with no headway (crosswind >= airspeed, or ground speed < 25% of airspeed) is **infeasible**. The planner costs every leg, per drone, at that drone's altitude.
+- **Wind shear**: forecasts are for 10 m; wind at flight altitude follows a power law (exponent 0.2), so the 70 m layer faces ~47% more wind than the 30 m layer. High layers drop out first.
+- **Go / no-go**: a flight limit (6 m/s sustained, 10 m/s gusts at 10 m) and a lower **spray limit** (4.5 m/s, drift). Above the flight limit nothing flies (`grounded_by_wind`); above the spray limit spraying is deferred, watering continues. Flights are planned for the morning lull (75% of the forecast daily maximum). The limits are validated against the aircraft: a drone cruising at 10 m/s only makes headway below ~7.5 m/s aloft, so `max_flight_ms` cannot be set above that.
+- **Planning vs the gate**: energy is planned against the *design* wind (sustained + half the gust margin); the gate **recomputes energy itself** for the wind each mission was planned for, instead of trusting the planner's number. (A subtle bug found by the season benchmark: the wind stored on a mission is rounded, so planning with the unrounded value let a plan exceed its battery budget by 0.04 Wh. Planner and gate now use identical numbers; a regression test fails without the fix.)
+- **Separation**: gusts and GNSS error widen the horizontal clearance the 3D collision checker demands (`+3 m + 0.5 m per m/s of gust`); in strong gusts a concurrent schedule may be impossible, and the fleet then flies one drone at a time.
+- **Spray drift** reduces spray effectiveness in the simulator (no loss up to 2 m/s, 80% effective at 4.5 m/s).
+- **Hardware**: the ground station refuses to fly if a *measured* wind (optional `wind_provider`, e.g. an anemometer) exceeds the limit, and arms PX4's own wind failsafe (`COM_WIND_MAX`, `COM_WIND_MAX_ACT` = return), which is **disabled by default** in PX4. Verified on PX4 SITL by read-back (SITL has no wind source, so wind *physics* is validated by unit tests and the model, not in simulation).
+
+Measured (`scripts/eval_wind.py`; 8 wind directions x 4 farms; 120-day season x 3 farms):
+
+| Wind at 10 m | Energy of a wind-blind plan, reality vs plan | Flights that would breach the battery reserve | Wind-aware planning |
+|---|---|---|---|
+| 1 m/s | +1% | 84% | 0 breaches |
+| 2 m/s | +6% | 100% | 0 |
+| 3 m/s | +16% | 100% | 0 |
+| 4 m/s | +36% | 100% | 0 |
+| 5+ m/s | some legs cannot make headway | 100% | 0 (flights that remain are the feasible ones) |
+
+(Wind-blind plans fill each battery to its limit, so even a light wind tips them over; the point is the size of the error and that the gate catches every one.)
+
+| Season | Yield | Water | No-fly days / 120 | Spraying postponed (days) | Unsafe plans |
+|---|---|---|---|---|---|
+| wind ignored (calm air) | 0.991 | 118 mm | 0 | 0 | 0 |
+| wind handled | 0.965 | 89 mm | 5.7 | 10.7 | 0 |
+
+Handling wind honestly costs ~2.6 yield points in this climate (grounded days and postponed spraying): that is the real price of not flying into a gale.
+
+## GPS (GNSS) loss
+A multirotor without GPS cannot navigate home, so the response is **not** return-to-launch (`gps.py`, executor in `hardware.py`):
+1. **Before takeoff** a drone must have a 3D fix and >= 10 satellites, or it is refused (verified on PX4 SITL: 6 satellites -> refused).
+2. **In flight** a GPS watcher polls the receiver every second. When the fix degrades: the **payload is frozen** (never spray or water blind), the drone **holds**, and if the fix is not back within `grace_s` (10 s) it **lands in place**; if it returns, the mission **resumes**. If `hold` is impossible without a position, it still lands.
+3. **Protecting the others**: a drone descending falls through every lower layer, so every drone on a **lower** altitude layer is ordered home at once (they still have GPS). Drones above it are unaffected.
+4. **Recovery**: the landed drone is grounded until a person recovers it (`recovery_days`); its unfinished patches are re-planned; later flights of that drone are cancelled; battery energy is charged for what was actually flown.
+Verified on **real PX4** (`scripts/sitl_gps.sh preflight|dip|loss`, GPS removed with `SIM_GPS_USED`): a 4 s dropout -> hold, resume, finish 4/4; permanent loss -> hold 8 s, land in place, `gps_lost`; PX4's own log shows its "blind land" failsafe engaging as well, so the autopilot and this layer agree. A dropout may make PX4's own failsafe briefly start a descent before the mission resumes; altitude loss during a dip was not measured.
+In the simulator, outages are drawn per flight-hour (deterministic per seed/day, independent of strategy):
+
+| GPS losses per flight-hour | Losses / season | Drone-days grounded | Yield |
+|---|---|---|---|
+| 0 | 0 | 0 | 0.965 |
+| 0.02 | 0.3 | 0.7 | 0.965 |
+| 0.10 | 6.7 | 13.3 | 0.960 |
+| 0.30 | 13.0 | 25.7 | 0.953 |
+
+Even a pessimistic outage rate (0.3/h: 13 drones landing in fields per season) costs ~1.2 yield points and never produces an unsafe plan.
+**Not modelled:** spoofing/jamming detection, GNSS degradation short of loss (accuracy only widens the separation margin), visual/optical-flow fallback navigation, recovery logistics beyond a fixed delay.

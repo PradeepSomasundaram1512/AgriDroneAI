@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.4.0
+- **Wind handling**: wind triangle energy/time per leg (headwind/tailwind/crosswind, infeasible legs), wind shear by altitude layer, flight and spray go/no-go limits, gust-widened collision clearance, spray drift in the simulator, wind-aware planner and an independent re-check in the safety gate, PX4 wind failsafe armed on hardware, measured-wind pre-flight check. Real wind forecasts via Open-Meteo.
+- **GPS-loss handling**: pre-flight GPS quality, in-flight watcher (freeze payload, hold, resume or land in place), lower drones ordered home, grounded-drone tracking and recovery, simulator outages, tested on real PX4 SITL.
+- Bug found by the season benchmark and fixed with a regression test: planner/gate energy mismatch from a rounded wind value.
+- Dashboard: wind arrow and panel, GPS-loss replay and panel, plain-language events. Policy validation for wind/GPS settings. 170+ tests.
+
 ## 0.3.0
 - **Collision avoidance**: per-drone launch pads, time-resolved 3D separation replay, launch staggering / pre-landing holds, one-at-a-time fallback; enforced by the safety gate and the ground station.
 - **Rechargeable drones**: persistent state of charge, charging or pack swap between flights, overnight recharge, battery wear; planner budgets from it and plans are verified flight by flight.

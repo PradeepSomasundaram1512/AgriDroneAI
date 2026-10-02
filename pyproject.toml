@@ -1,6 +1,6 @@
 [project]
 name = "agridrone"
-version = "0.3.0"
+version = "0.4.0"
 description = "AgriDroneAI: autonomous precision-agriculture drone network (simulation-first)"
 requires-python = ">=3.11"
 dependencies = []
