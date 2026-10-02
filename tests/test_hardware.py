@@ -23,11 +23,15 @@ class FakeLink:
     async def start(self): self.started = True
     async def progress(self):
         n = len(self.uploaded)
+        if getattr(self, "stale", False):
+            yield 7, 7  # stale event replayed from a previous mission
         for i in range(1, n + 1):
             if self.hang: await asyncio.sleep(10)
             self.bat -= self.drain
             yield i, n
     async def rtl(self): self.rtl_called = True
+    async def wait_airborne(self, timeout): return not getattr(self, 'no_takeoff', False)
+    async def wait_landed(self, timeout): return not getattr(self, 'stuck', False)
 
 
 def pol(**hw):
@@ -142,3 +146,27 @@ def test_stale_mission_expires_and_kill_switch(tmp_path):
     store.append_jsonl("queue.jsonl", {**q, "id": "x", "ts": q["ts"] + 13 * 3600}, tmp_path)
     p["kill_switch"] = True
     assert process_once(p, tmp_path, executor=ex(p)[0], now=q["ts"] + 13 * 3600 + 1)["status"] == "refused"
+
+
+def test_unconfirmed_landing_is_not_completed():
+    class Stuck(FakeLink):
+        stuck = True
+    e = FlightExecutor(pol(), link_factory=lambda a: Stuck(a), payload=NullPayload())
+    r = asyncio.run(e.fly([mission()]))[0]
+    assert r.status == "aborted" and "landing" in r.reason
+
+
+def test_no_takeoff_is_never_completed_and_payload_silent():
+    class Grounded(FakeLink):
+        no_takeoff = True
+    pay = NullPayload()
+    r = asyncio.run(FlightExecutor(pol(), link_factory=lambda a: Grounded(a), payload=pay).fly([mission()]))[0]
+    assert r.status == "aborted" and pay.events == [] and FakeLink.instances[-1].rtl_called
+
+
+def test_stale_progress_event_is_ignored():
+    class Stale(FakeLink):
+        stale = True
+    pay = NullPayload()
+    r = asyncio.run(FlightExecutor(pol(), link_factory=lambda a: Stale(a), payload=pay).fly([mission()]))[0]
+    assert r.status == "completed" and len(pay.events) == 2

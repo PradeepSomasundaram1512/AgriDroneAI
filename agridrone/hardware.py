@@ -89,6 +89,26 @@ class MavsdkLink:
     async def rtl(self):
         await self.sys.action.return_to_launch()
 
+    async def wait_airborne(self, timeout):
+        async def wait():
+            async for in_air in self.sys.telemetry.in_air():
+                if in_air:
+                    return True
+        try:
+            return bool(await asyncio.wait_for(wait(), timeout))
+        except asyncio.TimeoutError:
+            return False
+
+    async def wait_landed(self, timeout):
+        async def wait():
+            async for in_air in self.sys.telemetry.in_air():
+                if not in_air:
+                    return True
+        try:
+            return bool(await asyncio.wait_for(wait(), timeout))
+        except asyncio.TimeoutError:
+            return False
+
 
 class FlightExecutor:
     def __init__(self, policy, link_factory=MavsdkLink, payload=None):
@@ -133,7 +153,16 @@ class FlightExecutor:
                 return FlightResult(mission.drone, "refused", 0, total, f"battery {pct}% < required {need:.0f}%")
             await link.upload(wps, self.hw.get("speed_m_s", 5.0), self.hw.get("dwell_s", 4))
             await link.start()
-            return await asyncio.wait_for(self._monitor(link, mission, total, reserve), self.hw.get("max_flight_s", 1200))
+            # Progress/in_air streams can replay STALE state from a previous mission, so completion is only
+            # believed after takeoff is confirmed (found by SITL: a restart produced an instant false "completed").
+            if not await link.wait_airborne(self.hw.get("takeoff_wait_s", 90)):
+                await self._abort(link)
+                return FlightResult(mission.drone, "aborted", 0, total, "no takeoff confirmed; RTL/land commanded")
+            res = await asyncio.wait_for(self._monitor(link, mission, total, reserve), self.hw.get("max_flight_s", 1200))
+            # the drone is only "done" once it is back on the ground; the next sortie must not start before that
+            if not await link.wait_landed(self.hw.get("land_wait_s", 300)):
+                res.status, res.reason = "aborted", (res.reason + "; did not confirm landing").lstrip("; ")
+            return res
         except asyncio.TimeoutError:
             await self._abort(link)
             return FlightResult(mission.drone, "aborted", 0, total, "timeout; RTL commanded")
@@ -144,6 +173,8 @@ class FlightExecutor:
     async def _monitor(self, link, mission, total, reserve):
         reached = 0
         async for cur, tot in link.progress():
+            if tot != total:  # stale event from a different mission
+                continue
             while reached < min(cur, total):  # waypoint `reached` was just completed
                 await self.payload.trigger(*reversed(mission.targets[reached]))
                 reached += 1
