@@ -33,4 +33,5 @@ jobs:
       - name: Open incident issue on failure
         if: failure()
         env: {GH_TOKEN: "${{ github.token }}"}
-        run: gh issue create --title "Autopilot incident $(date -u +%F)" --label incident --body "Cycle failed: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}. Runbook: docs/GOVERNANCE.md#incident-response" || true
+        run: |
+          gh issue create --title "Autopilot incident $(date -u +%F)" --label incident --body "Cycle failed: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}. Runbook: docs/GOVERNANCE.md#incident-response" || true
