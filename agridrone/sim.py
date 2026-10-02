@@ -19,6 +19,15 @@ from .wind import spray_efficacy
 ROOT_ZONE_MM = 300.0
 IRRIGATION_MM = 36.0
 THETA_MAX = 0.55
+# The world's hidden physics. The controller is NEVER told these: they can be perturbed (policy.field.physics) to test whether the
+# controller still works when its assumptions about the crop are wrong (scripts/robustness.py).
+PHYSICS = {
+    "onset_moisture": 0.30,  # soil water below which the crop starts to suffer
+    "onset_pest": 0.40,  # pest pressure above which the crop starts to suffer
+    "et_scale": 1.0,  # multiplier on evapotranspiration (hotter / thirstier crop)
+    "pest_growth": 0.065,  # pest growth rate in good weather
+    "obs_noise": 0.02,  # sensor noise (1 sigma)
+}
 
 
 @dataclass
@@ -46,10 +55,11 @@ class Farm:
     faults: dict = field(default_factory=dict)  # {cell: {"mode": dead|stuck|bias|spike, "start": day, "val": ...}}
     fault_rng: random.Random = None
     flight_wind: float = 0.0  # sustained wind during today's flights (m/s): spray drift loss
+    phys: dict = field(default_factory=lambda: dict(PHYSICS))
     init_scene: str = None  # id of the satellite scene that seeded this twin's spatial variability
 
     @classmethod
-    def create(cls, size=24, seed=7, start_doy=120, fault_rate=0.0):
+    def create(cls, size=24, seed=7, start_doy=120, fault_rate=0.0, physics=None):
         f = cls(
             size=size,
             seed=seed,
@@ -57,6 +67,7 @@ class Farm:
             obs_rng=random.Random(seed + 9001),
             start_doy=start_doy,
             fault_rng=random.Random(seed + 31337),
+            phys={**PHYSICS, **(physics or {})},
         )
         soil, host = f._smooth_map(4242, 0.75, 1.3), f._smooth_map(777, 0.35, 1.5)
         for x in range(size):
@@ -97,6 +108,7 @@ class Farm:
             w = Weather(rain, w.tmax, w.tmin, w.et0_mm, w.source)
         self.last_weather = w
         n = self.size
+        ph = self.phys
         growth = 1 / (1 + math.exp(-(self.day - 35) / 12))  # crop growth curve (0..1) over the season
         kc = 0.35 + 0.8 * growth  # crop coefficient rises with canopy
         humid = 1.0 if w.rain_mm > 1 else 0.55
@@ -104,23 +116,24 @@ class Farm:
         old = {k: c.pest for k, c in self.cells.items()}
         for (x, y), c in self.cells.items():
             # --- water balance (mm -> volumetric fraction over the root zone)
-            fstress = min(1.0, c.moisture / 0.30)  # crops close stomata when dry
+            fstress = min(1.0, c.moisture / ph["onset_moisture"])  # crops close stomata when dry
             zr = ROOT_ZONE_MM * (1.3 - 0.6 * (c.soil - 0.75) / 0.55)  # sandy (soil high) = shallow effective store, clay = deep
-            etc = kc * w.et0_mm * fstress * (0.8 + 0.4 * (c.soil - 0.75) / 0.55)
+            etc = ph["et_scale"] * kc * w.et0_mm * fstress * (0.8 + 0.4 * (c.soil - 0.75) / 0.55)
             drain = max(0.0, c.moisture - 0.42) * (0.25 + 0.35 * c.soil)
             c.moisture = min(THETA_MAX, max(0.02, c.moisture + (0.85 * w.rain_mm - etc) / zr - drain))
             # --- pests: temperature-driven growth + diffusion from neighbours + rare arrivals at the edges
             nb = [old[(x + dx, y + dy)] for dx, dy in ((1, 0), (-1, 0), (0, 1), (0, -1)) if (x + dx, y + dy) in old]
             spread = 0.10 * max(0.0, (sum(nb) / len(nb)) - old[(x, y)])
             arrive = 0.12 if (self.rng.random() < (0.004 if (x in (0, n - 1) or y in (0, n - 1)) else 0.0007) * (0.3 + suit)) else 0.0
-            c.pest = min(1.0, max(0.0, old[(x, y)] * (1 + 0.065 * suit * c.host * (1 - old[(x, y)]) - 0.02) + spread + arrive))
+            c.pest = min(1.0, max(0.0, old[(x, y)] * (1 + ph["pest_growth"] * suit * c.host * (1 - old[(x, y)]) - 0.02) + spread + arrive))
             # --- crop: greenness chases a growth curve, pulled down by stress; yield potential erodes with stress
-            stress = max(0.0, 0.30 - c.moisture) * 1.6 + max(0.0, c.pest - 0.4) * 0.9
+            stress = max(0.0, ph["onset_moisture"] - c.moisture) * 1.6 + max(0.0, c.pest - ph["onset_pest"]) * 0.9
             target = 0.28 + 0.62 * growth
             c.ndvi = min(0.92, max(0.1, c.ndvi + 0.22 * (target - 0.55 * stress - c.ndvi)))
             c.yield_potential = max(0.0, c.yield_potential - stress * 0.012 * (0.6 + 0.8 * growth))
 
-    def observe(self, cell, noise=0.02):
+    def observe(self, cell, noise=None):
+        noise = self.phys["obs_noise"] if noise is None else noise
         c = self.cells[cell]
 
         def n(v):

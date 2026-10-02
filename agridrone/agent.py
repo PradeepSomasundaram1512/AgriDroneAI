@@ -6,7 +6,7 @@ import random
 import time
 import traceback
 
-from . import advisor, fleet, gps, imagery, planner, quality, safety, store, traffic, weather
+from . import advisor, calibrate, fleet, gps, imagery, planner, quality, safety, store, traffic, weather
 from . import wind as W
 from . import model as M
 from .adapters import SimAdapter
@@ -71,69 +71,95 @@ def _labelled_sample(farm, clean_obs, n, rng):
     return [(o["ndvi"] - med, o["moisture"], o["pest"], M.true_label(farm.cells[c])) for o, c in zip(obs, cells)]
 
 
-def run_cycle(policy=None, state_dir=None, now=None):
-    policy = policy or load_policy()
-    thr = dict(policy["thresholds"])
-    thr.update(load_json("threshold_overrides.json", {}, state_dir))
-    t0 = time.time()
+class Cycle:
+    """One day of operation as explicit, separately readable stages. Each stage reads and writes named attributes; run() sequences them and
+    turns ANY exception into a logged incident so the next scheduled day still happens. (This replaced a 295-line function; the order of
+    every
+    operation that draws from a random stream is unchanged, and tests/test_golden_cycle.py proves the behaviour is identical.)"""
 
-    def audit(kind, **kw):
-        append_jsonl("audit.jsonl", {"ts": now or time.time(), "kind": kind, **kw}, state_dir)
+    def __init__(self, policy, state_dir, now):
+        self.p, self.sd, self.now, self.t0 = policy, state_dir, now, time.time()
+        self.thr = dict(policy["thresholds"])
+        self.thr.update(load_json("threshold_overrides.json", {}, state_dir))
+        if policy.get("calibration", {}).get("enabled"):  # thresholds the system learned from the crop's own response (calibrate.py)
+            self.thr.update(
+                {k: v for k, v in load_json("calibrated.json", {}, state_dir).items() if k in ("moisture_irrigate", "pest_spray")}
+            )
+        self.rec = {"ok": False, "ts": now or time.time()}
+        self.level = policy["autonomy_level"]
+        self.sim_mode = self.level == "simulation"  # hardware modes plan ONE sortie: a battery swap needs a human at the aircraft
+        self.executed, self.fates, self.flown = 0, {}, []
+        self.gps_info = {"events": [], "patches_deferred": 0, "grounded": []}
 
-    rec = {"ok": False, "ts": now or time.time()}
-    try:
-        if policy.get("kill_switch"):
-            audit("kill_switch", detail="cycle skipped: kill switch engaged")
-            rec.update(ok=True, skipped=True)
-            append_jsonl("metrics.jsonl", rec, state_dir)
-            return rec
+    def audit(self, kind, **kw):
+        append_jsonl("audit.jsonl", {"ts": self.now or time.time(), "kind": kind, **kw}, self.sd)
 
-        migrated = store.migrate(state_dir)
+    # ------------------------------------------------------------------ stage 1: state, farm, satellite
+    def load(self):
+        p, sd = self.p, self.sd
+        migrated = store.migrate(sd)
         if migrated:
-            audit("state_migrated", archived_to=str(migrated.name), reason="simulation model upgraded; old state archived, starting clean")
-        farm = store.load_farm(
-            policy["field"]["seed"],
-            policy["field"]["size"],
-            state_dir,
-            policy["field"].get("sensor_fault_rate", 0.0),
-            policy.get("weather", {}).get("start_doy", 120),
+            self.audit(
+                "state_migrated", archived_to=str(migrated.name), reason="simulation model upgraded; old state archived, starting clean"
+            )
+        self.farm = store.load_farm(
+            p["field"]["seed"],
+            p["field"]["size"],
+            sd,
+            p["field"].get("sensor_fault_rate", 0.0),
+            p.get("weather", {}).get("start_doy", 120),
+            p["field"].get("physics"),
         )
         # real satellite data: refresh when stale (never raises), then seed the twin with the real field's spatial pattern
         if not os.environ.get("AGRIDRONE_OFFLINE"):
-            st = imagery.refresh(policy, state_dir)
+            st = imagery.refresh(p, sd)
             if st["status"] in ("updated", "unavailable", "error"):
-                audit("imagery", **st)
-        icfg = policy.get("imagery", {})
-        if icfg.get("init_field") and farm.init_scene is None and farm.day <= 7:
-            scenes = imagery.load_scenes(state_dir)
+                self.audit("imagery", **st)
+        if p.get("imagery", {}).get("init_field") and self.farm.init_scene is None and self.farm.day <= 7:
+            scenes = imagery.load_scenes(sd)
             if scenes:
-                imagery.init_field(farm, scenes[-1])
-                farm.init_scene = scenes[-1].id
-                audit("twin_initialized_from_satellite", scene=scenes[-1].id, date=scenes[-1].date, valid_frac=scenes[-1].valid_frac)
-        rng = random.Random(farm.seed * 1000 + farm.day)
-        wx, forecast, wx_src = weather.get_weather(policy, farm.day + 1, state_dir)
-        farm.step(wx)
+                imagery.init_field(self.farm, scenes[-1])
+                self.farm.init_scene = scenes[-1].id
+                self.audit("twin_initialized_from_satellite", scene=scenes[-1].id, date=scenes[-1].date, valid_frac=scenes[-1].valid_frac)
+
+    # ------------------------------------------------------------------ stage 2: the world moves one day
+    def advance(self):
+        f = self.farm
+        self.rng = random.Random(f.seed * 1000 + f.day)
+        self.wx, self.forecast, self.wx_src = weather.get_weather(self.p, f.day + 1, self.sd)
+        f.step(self.wx)
         save_json(
-            "weather.json", {"day": farm.day, "source": wx_src, "today": wx.__dict__, "forecast": [w.__dict__ for w in forecast]}, state_dir
+            "weather.json",
+            {"day": f.day, "source": self.wx_src, "today": self.wx.__dict__, "forecast": [w.__dict__ for w in self.forecast]},
+            self.sd,
         )
 
-        # --- model lifecycle: honest evaluation + continuous training with canary promotion/rollback ---
-        mdl = M.StressModel.from_dict(load_json("model.json", M.StressModel().to_dict(), state_dir))
-        ref = load_json("reference.json", None, state_dir)
+    # ------------------------------------------------------------------ stage 3: sensors -> clean data -> scouted sample -> calibration
+    def perceive(self):
+        p, sd = self.p, self.sd
         # data quality: detect + repair bad sensor readings BEFORE anything (model, planner) sees them
-        obs, dq = quality.clean(farm.observe_all(), state_dir, enabled=policy.get("quality_filter", True))
-        if dq["flagged"] or dq["quarantined"]:
-            audit("sensor_faults", flagged=dq["flagged"], quarantined=len(dq["quarantined"]), reasons=dq["reasons"])
-        sample = _labelled_sample(farm, obs, 120, rng)
-        train_buf = _load_buf("train_rows.json", state_dir)
-        eval_buf = _load_buf("eval_rows.json", state_dir)
+        self.obs, self.dq = quality.clean(self.farm.observe_all(), sd, enabled=p.get("quality_filter", True))
+        if self.dq["flagged"] or self.dq["quarantined"]:
+            self.audit("sensor_faults", flagged=self.dq["flagged"], quarantined=len(self.dq["quarantined"]), reasons=self.dq["reasons"])
+        self.sample = _labelled_sample(self.farm, self.obs, 120, self.rng)
+        learned, changed = calibrate.update(p, self.sample, sd)  # learn where THIS crop starts to suffer
+        self.thr.update(learned)
+        if changed:
+            self.audit("calibrated", **learned)
+
+    # ------------------------------------------------------------------ stage 4: the stress model (honest evaluation, canary, rollback)
+    def learn(self):
+        sd, thr, farm, sample = self.sd, self.thr, self.farm, self.sample
+        mdl = M.StressModel.from_dict(load_json("model.json", M.StressModel().to_dict(), sd))
+        ref = load_json("reference.json", None, sd)
+        train_buf, eval_buf = _load_buf("train_rows.json", sd), _load_buf("eval_rows.json", sd)
         # disjoint split: even rows may be trained on, odd rows are ONLY ever used to evaluate
         _add(train_buf, sample[0::2], TRAIN_CAP)
         _add(eval_buf, sample[1::2], EVAL_CAP)
-        recent = load_json("eval_recent.json", {}, state_dir)  # {day: held-out rows}: the CURRENT regime
+        recent = load_json("eval_recent.json", {}, sd)  # {day: held-out rows}: the CURRENT regime
         recent[str(farm.day)] = [[round(r[0], 4), round(r[1], 4), round(r[2], 4), r[3]] for r in sample[1::2]]
         recent = {k: v for k, v in recent.items() if farm.day - int(k) < 5}
-        save_json("eval_recent.json", recent, state_dir)
+        save_json("eval_recent.json", recent, sd)
         recent_rows = [tuple(r) for v in recent.values() for r in v]
         long_rows = eval_buf["pos"] + eval_buf["neg"]
 
@@ -146,7 +172,7 @@ def run_cycle(policy=None, state_dir=None, now=None):
         inc, inc_long = judge(mdl) if mdl.tree else ({"bal": None, "recall": None}, {"bal": None})
         cur_ndvi = [r[0] for r in sample]  # anomalies: drift here means the field is becoming heterogeneous
         drift = M.psi(ref, cur_ndvi) if ref else 0.0
-        last_train_day = load_json("last_train_day.json", 0, state_dir)
+        last_train_day = load_json("last_train_day.json", 0, sd)
         weak = (
             mdl.tree is None
             or inc["bal"] is None
@@ -167,9 +193,9 @@ def run_cycle(policy=None, state_dir=None, now=None):
                 )
                 if better:  # canary passed: promote
                     mdl, inc, retrained = cand, cs, True
-                    save_json("reference.json", cur_ndvi, state_dir)
-                    save_json("last_train_day.json", farm.day, state_dir)
-                audit(
+                    save_json("reference.json", cur_ndvi, sd)
+                    save_json("last_train_day.json", farm.day, sd)
+                self.audit(
                     "retrain",
                     promoted=retrained,
                     cand_bal=cs["bal"] and round(cs["bal"], 3),
@@ -179,87 +205,86 @@ def run_cycle(policy=None, state_dir=None, now=None):
                     rolled_back=not retrained,
                 )
             else:
-                audit("retrain_skipped", reason="training data lacks one class")
-        save_json("model.json", mdl.to_dict(), state_dir)
-        _save_buf("train_rows.json", train_buf, state_dir)
-        _save_buf("eval_rows.json", eval_buf, state_dir)
-        acc = inc["bal"] if inc["bal"] is not None else mdl.accuracy(sample)  # balanced accuracy, not raw accuracy
-        recall = inc["recall"]
-        if acc < thr["min_accuracy"] or (recall is not None and recall < thr["min_recall"]):
-            audit(
+                self.audit("retrain_skipped", reason="training data lacks one class")
+        save_json("model.json", mdl.to_dict(), sd)
+        _save_buf("train_rows.json", train_buf, sd)
+        _save_buf("eval_rows.json", eval_buf, sd)
+        self.mdl, self.drift, self.retrained = mdl, drift, retrained
+        self.acc = inc["bal"] if inc["bal"] is not None else mdl.accuracy(sample)  # balanced accuracy, not raw accuracy
+        self.recall = inc["recall"]
+        if self.acc < thr["min_accuracy"] or (self.recall is not None and self.recall < thr["min_recall"]):
+            self.audit(
                 "model_below_target",
-                balanced_accuracy=round(acc, 3),
-                recall=recall and round(recall, 3),
+                balanced_accuracy=round(self.acc, 3),
+                recall=self.recall and round(self.recall, 3),
                 detail="needs more/better labelled data; planner still protects crops via threshold rules",
             )
 
-        # --- plan, gate, act ---
+    # ------------------------------------------------------------------ stage 5: decide (wind go/no-go, targets, plan, safety gate)
+    def decide(self):
+        p, farm, wx = self.p, self.farm, self.wx
         # wind: flights are scheduled in the morning lull; above the limits nothing flies, above the spray limit only irrigation does
-        lim = W.limits(policy)
-        wind = (
+        lim = W.limits(p)
+        self.wind = (
             W.Wind(wx.wind_ms * lim["flight_window_factor"], wx.gust_ms * lim["flight_window_factor"], wx.wind_from_deg)
             if lim["enabled"]
             else W.CALM
         )
-        flight_ok, spray_ok, wind_why = W.go_no_go(wind, policy)
-        spray_deferred = []
-        if flight_ok:
-            targets = planner.find_targets(
-                farm, mdl if policy.get("model_enabled", True) else M.StressModel(), thr, forecast, obs, spray_ok, spray_deferred
-            )
+        self.flight_ok, spray_ok, wind_why = W.go_no_go(self.wind, p)
+        self.spray_deferred = []
+        if self.flight_ok:
+            model = self.mdl if p.get("model_enabled", True) else M.StressModel()
+            self.targets = planner.find_targets(farm, model, self.thr, self.forecast, self.obs, spray_ok, self.spray_deferred)
         else:
-            targets = []
-            audit("grounded_by_wind", reason=wind_why, wind=wind.as_tuple())
-        if flight_ok and not spray_ok and spray_deferred:
-            audit("spray_deferred_by_wind", patches=len(spray_deferred), reason=wind_why)
-        farm.flight_wind = wind.speed  # spray drift loss in the simulator
-        # hardware modes plan ONE sortie: a battery swap between sorties needs a human at the aircraft
-        sim_mode = policy["autonomy_level"] == "simulation"
-        batteries = fleet.Fleet.load(policy, state_dir)
-        batteries.today = farm.day  # drones that landed in a field earlier are grounded until `grounded_until`
-        overnight_wh, overnight_h = batteries.overnight()  # every pack is back to full at dawn
+            self.targets = []
+            self.audit("grounded_by_wind", reason=wind_why, wind=self.wind.as_tuple())
+        if self.flight_ok and not spray_ok and self.spray_deferred:
+            self.audit("spray_deferred_by_wind", patches=len(self.spray_deferred), reason=wind_why)
+        farm.flight_wind = self.wind.speed  # spray drift loss in the simulator
+        self.batteries = fleet.Fleet.load(p, self.sd)
+        self.batteries.today = farm.day  # drones that landed in a field earlier are grounded until `grounded_until`
+        self.overnight_wh, self.overnight_h = self.batteries.overnight()  # every pack is back to full at dawn
         missions = planner.plan(
-            targets,
-            policy,
-            sorties=policy["fleet"].get("sorties_per_day", 1) if sim_mode else 1,
-            allow_hold=sim_mode,
-            fleet=batteries,
-            wind=wind,
+            self.targets,
+            p,
+            sorties=p["fleet"].get("sorties_per_day", 1) if self.sim_mode else 1,
+            allow_hold=self.sim_mode,
+            fleet=self.batteries,
+            wind=self.wind,
         )
-        missions, dropped = safety.repair(missions, policy)
-        traffic_reps = [  # trimming a route changes its timing: prove the final schedule is conflict-free
-            traffic.schedule([m for m in missions if m.sortie == k], policy, allow_hold=sim_mode)
-            for k in sorted({m.sortie for m in missions})
+        self.missions, self.dropped = safety.repair(missions, p)
+        self.traffic_reps = [  # trimming a route changes its timing: prove the final schedule is conflict-free
+            traffic.schedule([m for m in self.missions if m.sortie == k], p, allow_hold=self.sim_mode)
+            for k in sorted({m.sortie for m in self.missions})
         ]
-        energy = batteries.simulate(missions)  # flight-by-flight battery check incl. charging between sorties
-        violations = safety.validate(missions, policy) + energy["violations"]
-        level = policy["autonomy_level"]
-        executed = 0
-        gps_info = {"events": [], "patches_deferred": 0, "grounded": []}
-        flown = missions
-        fates = {}
-        before = snapshot(farm)  # for the dashboard replay: the field as the drones found it
-        if violations:
-            audit("safety_block", violations=violations)
-        elif level == "simulation":
+        self.energy = self.batteries.simulate(self.missions)  # flight-by-flight battery check incl. charging between sorties
+        self.violations = safety.validate(self.missions, p) + self.energy["violations"]
+        self.flown = self.missions
+
+    # ------------------------------------------------------------------ stage 6: act (simulate the day, or queue it for the ground station)
+    def act(self):
+        p, farm, missions = self.p, self.farm, self.missions
+        self.before = snapshot(farm)  # for the dashboard replay: the field as the drones found it
+        if self.violations:
+            self.audit("safety_block", violations=self.violations)
+        elif self.sim_mode:
             # GNSS outages: a drone that loses its fix lands in place, drones below it are ordered home, the rest is deferred
-            flown, gps_info = missions, {"events": [], "patches_deferred": 0, "grounded": []}
-            events = gps.sample_losses(missions, policy, farm.seed, farm.day)
+            events = gps.sample_losses(missions, p, farm.seed, farm.day)
             if events:
-                flown, gps_info = gps.apply_losses(missions, events, policy)
-                for e in gps_info["events"]:
-                    batteries.ground(e["drone"], farm.day + 1 + int(gps.cfg(policy)["recovery_days"]))
-                    audit("gps_loss", **e, patches_deferred=gps_info["patches_deferred"])
-                energy = batteries.simulate(flown)  # truncated flights use less energy: charge what was really flown
-            executed = SimAdapter(farm).execute(flown)
-            fates = _fates(missions, flown, gps_info)
+                self.flown, self.gps_info = gps.apply_losses(missions, events, p)
+                for e in self.gps_info["events"]:
+                    self.batteries.ground(e["drone"], farm.day + 1 + int(gps.cfg(p)["recovery_days"]))
+                    self.audit("gps_loss", **e, patches_deferred=self.gps_info["patches_deferred"])
+                self.energy = self.batteries.simulate(self.flown)  # truncated flights use less energy: charge what was really flown
+            self.executed = SimAdapter(farm).execute(self.flown)
+            self.fates = _fates(missions, self.flown, self.gps_info)
         else:  # supervised / autonomous: cloud only QUEUES; the ground station at the farm flies
-            auto = level == "autonomous" and policy["hardware"].get("enabled", False)
+            auto = self.level == "autonomous" and p["hardware"].get("enabled", False)
             store.append_jsonl(
                 "queue.jsonl",
                 {
                     "id": f"day{farm.day}",
-                    "ts": now or time.time(),
+                    "ts": self.now or time.time(),
                     "approval": "auto" if auto else "human",
                     "missions": [
                         {
@@ -276,70 +301,78 @@ def run_cycle(policy=None, state_dir=None, now=None):
                         for m in missions
                     ],
                 },
-                state_dir,
+                self.sd,
             )
-            audit("queued", id=f"day{farm.day}", missions=len(missions), approval="auto" if auto else "human")
+            self.audit("queued", id=f"day{farm.day}", missions=len(missions), approval="auto" if auto else "human")
+        if not self.violations:
+            self.batteries.commit(self.energy)  # flown (or queued) day: end-of-day charge state and wear
+        self.batteries.save(self.sd)
 
-        if not violations:
-            batteries.commit(energy)  # flown (or queued) day: end-of-day charge state and wear
-        batteries.save(state_dir)
+    # ------------------------------------------------------------------ stage 7: record (summary, audit, dashboard feeds)
+    def summary(self):
+        p, farm, b, wind = self.p, self.farm, self.batteries, self.wind
         base_w, base_c = farm.blanket_usage()
-        summary = {
+        flown = self.flown if self.sim_mode and not self.violations else self.missions
+        return {
             "day": farm.day,
-            "targets": len(targets),
-            "executed": executed,
-            "sorties": len({m.sortie for m in missions}),
-            "gps_losses": len(gps_info["events"]),
-            "gps_patches_deferred": gps_info["patches_deferred"],
-            "drones_grounded": sum(1 for i in range(batteries.n) if batteries.grounded(i)),
+            "targets": len(self.targets),
+            "executed": self.executed,
+            "sorties": len({m.sortie for m in self.missions}),
+            "gps_losses": len(self.gps_info["events"]),
+            "gps_patches_deferred": self.gps_info["patches_deferred"],
+            "drones_grounded": sum(1 for i in range(b.n) if b.grounded(i)),
+            "moisture_trigger": round(self.thr["moisture_irrigate"], 3),
+            "pest_trigger": round(self.thr["pest_spray"], 3),
             "wind_ms": round(wind.speed, 1),
             "gust_ms": round(wind.gust, 1),
             "wind_from_deg": round(wind.from_deg),
-            "grounded_by_wind": not flight_ok,
-            "spray_deferred": len(spray_deferred),
-            "flight_hours": round(
-                sum(traffic.duration(m, policy) for m in (flown if level == "simulation" and not violations else missions)) / 3600, 3
-            ),
-            "fleet_energy_wh": energy["used_wh"],
-            "charged_between_flights_wh": energy["charged_wh"],
-            "overnight_charge_wh": round(overnight_wh),
-            "overnight_charge_hours": round(overnight_h, 1),
-            **batteries.summary(),
-            "traffic_min_ratio": min((r["min_ratio"] for r in traffic_reps if r.get("min_ratio") is not None), default=None),
-            "traffic_mode": "serialized" if any(r["mode"] == "serialized" for r in traffic_reps) else "concurrent",
-            "launch_stagger_s": max((r["max_delay_s"] for r in traffic_reps), default=0),
-            "rain_mm": wx.rain_mm,
-            "weather_source": wx_src,
-            "sensors_flagged": dq["flagged"],
-            "sensors_quarantined": len(dq["quarantined"]),
-            "dropped_by_safety": dropped,
-            "accuracy": round(acc, 3),
-            "recall": None if recall is None else round(recall, 3),
-            "psi": round(drift, 3),
-            "model_version": mdl.version,
-            "retrained": retrained,
+            "grounded_by_wind": not self.flight_ok,
+            "spray_deferred": len(self.spray_deferred),
+            "flight_hours": round(sum(traffic.duration(m, p) for m in flown) / 3600, 3),
+            "fleet_energy_wh": self.energy["used_wh"],
+            "charged_between_flights_wh": self.energy["charged_wh"],
+            "overnight_charge_wh": round(self.overnight_wh),
+            "overnight_charge_hours": round(self.overnight_h, 1),
+            **b.summary(),
+            "traffic_min_ratio": min((r["min_ratio"] for r in self.traffic_reps if r.get("min_ratio") is not None), default=None),
+            "traffic_mode": "serialized" if any(r["mode"] == "serialized" for r in self.traffic_reps) else "concurrent",
+            "launch_stagger_s": max((r["max_delay_s"] for r in self.traffic_reps), default=0),
+            "rain_mm": self.wx.rain_mm,
+            "weather_source": self.wx_src,
+            "sensors_flagged": self.dq["flagged"],
+            "sensors_quarantined": len(self.dq["quarantined"]),
+            "dropped_by_safety": self.dropped,
+            "accuracy": round(self.acc, 3),
+            "recall": None if self.recall is None else round(self.recall, 3),
+            "psi": round(self.drift, 3),
+            "model_version": self.mdl.version,
+            "retrained": self.retrained,
             "water_saved_pct": round(100 * (1 - farm.water_used / base_w), 1) if base_w else 0.0,
             "chem_saved_pct": round(100 * (1 - farm.chem_used / base_c), 1) if base_c else 0.0,
             "yield_index": round(farm.mean_yield(), 4),
-            "plan_seconds": round(time.time() - t0, 3),
+            "plan_seconds": round(time.time() - self.t0, 3),
         }
-        adv = advisor.advise(summary, thr)
+
+    def record(self):
+        farm, sd = self.farm, self.sd
+        summary = self.summary()
+        adv = advisor.advise(summary, self.thr)
         if adv["thresholds"]:
-            ov = load_json("threshold_overrides.json", {}, state_dir)
+            ov = load_json("threshold_overrides.json", {}, sd)
             ov.update(adv["thresholds"])
-            save_json("threshold_overrides.json", ov, state_dir)
-        audit("cycle", **summary, advisor_note=adv["note"])
-        store.save_farm(farm, state_dir)
+            save_json("threshold_overrides.json", ov, sd)
+        self.audit("cycle", **summary, advisor_note=adv["note"])
+        store.save_farm(farm, sd)
         # dashboard feed: today's mission (animated replay) + a rolling 30-day field history (time-lapse)
         save_json(
             "last_mission.json",
             {
                 "day": farm.day,
                 "size": farm.size,
-                "before": before,
-                "no_fly": policy["no_fly_cells"],
-                "wind": wind.as_tuple(),
-                "gps_events": gps_info["events"],
+                "before": self.before,
+                "no_fly": self.p["no_fly_cells"],
+                "wind": self.wind.as_tuple(),
+                "gps_events": self.gps_info["events"],
                 "missions": [
                     {
                         "drone": m.drone,
@@ -349,21 +382,44 @@ def run_cycle(policy=None, state_dir=None, now=None):
                         "t0": m.t0,
                         "hold": m.hold,
                         "pad": m.pad if m.pad >= 0 else m.drone,
-                        "soc": next((r for r in energy["drones"].get(m.drone, []) if r["sortie"] == m.sortie), None),
-                        "fate": fates.get((m.drone, m.sortie)),
+                        "soc": next((r for r in self.energy["drones"].get(m.drone, []) if r["sortie"] == m.sortie), None),
+                        "fate": self.fates.get((m.drone, m.sortie)),
                         "targets": [[c[0], c[1], a] for c, a in m.targets],
                     }
-                    for m in missions
+                    for m in self.missions
                 ],
             },
-            state_dir,
+            sd,
         )
-        hist = load_json("field_history.json", [], state_dir)
+        hist = load_json("field_history.json", [], sd)
         hist = [h for h in hist if h["day"] != farm.day][-29:] + [{"day": farm.day, "cells": snapshot(farm)}]
-        save_json("field_history.json", hist, state_dir)
-        rec.update(ok=True, **summary)
-    except Exception as e:  # self-healing: record the incident, keep the loop alive for the next run
-        audit("incident", error=repr(e), trace=traceback.format_exc()[-800:])
-        rec.update(ok=False, error=repr(e))
-    append_jsonl("metrics.jsonl", rec, state_dir)
-    return rec
+        save_json("field_history.json", hist, sd)
+        self.rec.update(ok=True, **summary)
+
+    # ------------------------------------------------------------------ the day
+    def run(self):
+        try:
+            if self.p.get("kill_switch"):
+                self.audit("kill_switch", detail="cycle skipped: kill switch engaged")
+                self.rec.update(ok=True, skipped=True)
+                append_jsonl("metrics.jsonl", self.rec, self.sd)
+                return self.rec
+            for stage in (self.load, self.advance, self.perceive, self.learn, self.decide, self.act, self.record):
+                stage()
+        except Exception as e:  # self-healing: record the incident, keep the loop alive for the next run
+            self.audit("incident", error=repr(e), trace=traceback.format_exc()[-800:])
+            self.rec.update(ok=False, error=repr(e))
+        append_jsonl("metrics.jsonl", self.rec, self.sd)
+        for log_name in (
+            "audit.jsonl",
+            "metrics.jsonl",
+            "flights.jsonl",
+            "queue.jsonl",
+        ):  # keep git-tracked logs bounded (lossless archive)
+            store.rotate(log_name, self.sd)
+        return self.rec
+
+
+def run_cycle(policy=None, state_dir=None, now=None):
+    """One day of operation. See Cycle for the stages."""
+    return Cycle(policy or load_policy(), state_dir, now).run()

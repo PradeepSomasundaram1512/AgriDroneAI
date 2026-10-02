@@ -126,5 +126,11 @@
     "recovery_cost": 150.0,
     "operator_per_season": 400.0,
     "_note": "PLACEHOLDER prices (mid-western corn ballpark): replace with your own. Agronomic inputs come from the simulation, so this is a decision aid, not a forecast."
+  },
+  "calibration": {
+    "enabled": false,
+    "margin_moisture": 0.015,
+    "margin_pest": 0.02,
+    "_note": "Learn the crop's real stress points from its greenness response and set the action thresholds just beyond them (bounded around the policy defaults). Off until validated on your crop."
   }
 }

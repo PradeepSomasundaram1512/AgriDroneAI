@@ -66,13 +66,15 @@ seed set, so real agronomist labels will be harder.
 `scripts/benchmark.py`: 120-day season, 576 patches, 6 random farms. Every strategy sees **identical weather** (environment and
 sensor noise use separate random streams), so differences come only from what each strategy does. Yield index 1.00 = no crop loss.
 
-| Strategy | Yield | Water (mm/patch) | Sprays/patch |
-|---|---|---|---|
-| Do nothing | 87.9% ± 6.4 | 0 | 0.0 |
-| Fixed schedule | 100.0% ± 0.0 | 612 | 8.0 |
-| AI agent, rules only | 99.7% ± 0.1 | 122 | 0.56 |
-| AI agent, 1 flight/day | 96.0% ± 4.2 | 66 | 0.69 |
-| AI agent, 3 flights/day | 99.7% ± 0.1 | 126 | 0.62 |
+<!-- BENCH:START -->
+| Strategy | Yield | Water (mm/patch) | Sprays/patch | Flight hours |
+|---|---|---|---|---|
+| Do nothing | 87.9% ± 6.4 | 0 | 0.0 | - |
+| Fixed schedule | 100.0% ± 0.0 | 612 | 8.0 | - |
+| AI agent, rules only | 99.7% ± 0.1 | 122 | 0.56 | - |
+| AI agent, 1 flight/day | 96.0% ± 4.2 | 66 | 0.69 | - |
+| AI agent, 3 flights/day | 99.7% ± 0.1 | 126 | 0.62 | - |
+<!-- BENCH:END -->
 
 - The AI crew keeps **99.7% of the fixed schedule's yield with ~79% less water and ~92% fewer sprays**; doing nothing loses ~12% of the crop.
 - **Capacity matters:** one flight/day per drone cannot keep up with a dry spell (96% yield); with battery swaps (3 flights/day) a 3-drone fleet reaches the plateau (backlog -> ~0).

@@ -5,7 +5,7 @@ import random
 from pathlib import Path
 
 from .config import STATE_DIR
-from .sim import Cell, Farm
+from .sim import PHYSICS, Cell, Farm
 
 
 def _p(name, d):
@@ -62,6 +62,7 @@ def save_farm(f: Farm, d=None):
         "fault_rng": _rng(f.fault_rng),
         "start_doy": f.start_doy,
         "init_scene": f.init_scene,
+        "phys": f.phys,
         "faults": [[x, y, v["mode"], v["start"], v["bias"], v["frozen"]] for (x, y), v in f.faults.items()],
         "cells": [
             [
@@ -80,10 +81,10 @@ def save_farm(f: Farm, d=None):
     p.write_text(json.dumps(data))
 
 
-def load_farm(seed, size, d=None, fault_rate=0.0, start_doy=120) -> Farm:
+def load_farm(seed, size, d=None, fault_rate=0.0, start_doy=120, physics=None) -> Farm:
     p = _p("farm.json", d)
     if not p.exists():
-        return Farm.create(size, seed, start_doy, fault_rate)
+        return Farm.create(size, seed, start_doy, fault_rate, physics)
     data = json.loads(p.read_text())
     f = Farm(
         size=data["size"],
@@ -93,6 +94,7 @@ def load_farm(seed, size, d=None, fault_rate=0.0, start_doy=120) -> Farm:
         chem_used=data["chem"],
         start_doy=data.get("start_doy", 120),
         init_scene=data.get("init_scene"),
+        phys={**PHYSICS, **data.get("phys", {})},
     )
     f.rng, f.obs_rng = _load_rng(data["rng"]), (_load_rng(data["obs_rng"]) if "obs_rng" in data else random.Random(data["seed"] + 9001))
     f.fault_rng = _load_rng(data["fault_rng"]) if "fault_rng" in data else random.Random(data["seed"] + 31337)
@@ -110,6 +112,28 @@ def append_jsonl(name, rec, d=None):
     p.parent.mkdir(parents=True, exist_ok=True)
     with p.open("a") as fh:
         fh.write(json.dumps(rec, default=str) + "\n")
+
+
+def rotate(name, d=None, max_bytes=300_000, keep_lines=1200):
+    """Keep an append-only log from growing forever in git: when it passes max_bytes, move everything except the newest keep_lines into a
+    gzip archive (state/archive/<name>-<UTC timestamp>.jsonl.gz). Lossless: archive + live file always hold every line."""
+    import gzip
+    from datetime import UTC, datetime
+
+    p = _p(name, d)
+    if not p.exists() or p.stat().st_size <= max_bytes:
+        return None
+    lines = p.read_text().splitlines()
+    if len(lines) <= keep_lines:
+        return None
+    old, new = lines[:-keep_lines], lines[-keep_lines:]
+    arch = p.parent / "archive"
+    arch.mkdir(exist_ok=True)
+    out = arch / f"{Path(name).stem}-{datetime.now(UTC):%Y%m%dT%H%M%S%f}.jsonl.gz"
+    with gzip.open(out, "wt") as fh:
+        fh.write("\n".join(old) + "\n")
+    p.write_text("\n".join(new) + "\n")
+    return out
 
 
 def read_jsonl(name, d=None):

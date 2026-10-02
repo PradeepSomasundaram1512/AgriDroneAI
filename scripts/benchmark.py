@@ -10,6 +10,7 @@ streams, so strategies differ only in what they do).
   PYTHONPATH=. python scripts/benchmark.py [days=120] [seeds=1..6]"""
 
 import os
+import random
 import statistics as st
 import sys
 import tempfile
@@ -22,8 +23,25 @@ from agridrone.config import load_policy
 from agridrone.sim import Farm
 
 
-def passive(seed, days, size, calendar):
-    f = Farm.create(size, seed)
+def triggered(seed, days, size, physics=None):
+    """A competent human baseline (not a dumb calendar): every 3 days scout 40 random patches with the same noisy sensors; irrigate the WHOLE
+    field if the sampled mean moisture is low, spray the WHOLE field if >= 10% of sampled patches show pests (what a farmer with a pivot or a
+    boom sprayer does: no drones, no per-patch targeting)."""
+    f = Farm.create(size, seed, physics=physics)
+    rng = random.Random(seed + 1)
+    for _ in range(days):
+        f.step(weather.synthetic(f.day + 1, seed))
+        if f.day % 3 == 0:
+            obs = [f.observe(c) for c in rng.sample(list(f.cells), 40)]
+            if sum(o["moisture"] for o in obs) / len(obs) < 0.33:
+                [f.apply(c, "irrigate") for c in f.cells]
+            if sum(o["pest"] > 0.45 for o in obs) / len(obs) >= 0.10:
+                [f.apply(c, "spray") for c in f.cells]
+    return f.mean_yield(), f.water_used, f.chem_used, 0.0, 0.0
+
+
+def passive(seed, days, size, calendar, physics=None):
+    f = Farm.create(size, seed, physics=physics)
     for _ in range(days):
         f.step(weather.synthetic(f.day + 1, seed))
         if calendar:
@@ -34,12 +52,15 @@ def passive(seed, days, size, calendar):
     return f.mean_yield(), f.water_used, f.chem_used, 0.0, 0.0
 
 
-def agent(seed, days, size, sorties, model=True, fault_rate=0.0, quality=True):
+def agent(seed, days, size, sorties, model=True, fault_rate=0.0, quality=True, physics=None, overrides=None):
     pol = load_policy()
     pol["field"]["seed"], pol["field"]["size"] = seed, size
     pol["fleet"]["sorties_per_day"], pol["model_enabled"] = sorties, model
     pol["weather"]["source"] = "synthetic"
     pol["field"]["sensor_fault_rate"], pol["quality_filter"] = fault_rate, quality
+    pol["field"]["physics"] = physics
+    for sect, kv in (overrides or {}).items():
+        pol[sect].update(kv)
     d = tempfile.mkdtemp()
     t = time.time()
     ok, hours = True, 0.0
@@ -56,6 +77,7 @@ def main(days=120, seeds=(1, 2, 3, 4, 5, 6), size=24):
     strategies = {
         "none": lambda s: passive(s, days, size, False),
         "calendar": lambda s: passive(s, days, size, True),
+        "triggered": lambda s: triggered(s, days, size),
         "thresholds": lambda s: agent(s, days, size, 3, model=False),
         "agent-1": lambda s: agent(s, days, size, 1),
         "agent-3": lambda s: agent(s, days, size, 3),
@@ -70,7 +92,7 @@ def main(days=120, seeds=(1, 2, 3, 4, 5, 6), size=24):
             f"{k:11s} {st.mean(y):.3f} ± {st.pstdev(y):.3f}   {st.mean(r[1] for r in v) / n:12.0f}   {st.mean(r[2] for r in v) / n:11.2f}   {st.mean(r[3] for r in v):6.2f}"
         )
     print("\npaired yield difference vs calendar (per seed): ", end="")
-    for k in ("none", "thresholds", "agent-1", "agent-3"):
+    for k in ("none", "triggered", "thresholds", "agent-1", "agent-3"):
         d = [a[0] - b[0] for a, b in zip(res[k], res["calendar"])]
         print(f"\n  {k:11s} mean {st.mean(d):+.3f}  wins {sum(x > 0 for x in d)}/{len(d)}", end="")
     d = [a[0] - b[0] for a, b in zip(res["agent-3"], res["thresholds"])]

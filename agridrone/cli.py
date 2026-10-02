@@ -113,6 +113,8 @@ def main(argv=None):
     sub.add_parser("brief", help="today's plain-language briefing")
     ak = sub.add_parser("ask", help="ask the farm a question in plain English (rules; Claude too if ANTHROPIC_API_KEY is set)")
     ak.add_argument("question", nargs="+")
+    ds = sub.add_parser("docs-sync", help="regenerate (or --check) the benchmark tables in the docs from docs/benchmark.json")
+    ds.add_argument("--check", action="store_true")
     sub.add_parser("verify", help="check state files are healthy (autopilot runs this before committing)")
     sub.add_parser("dashboard", help="write docs/dashboard.html")
     r = sub.add_parser("report")
@@ -146,6 +148,17 @@ def main(argv=None):
             text, src = briefing.ask(" ".join(a.question), data)
             print(f"{text}\n\n[answered by: {src}]")
         return 0
+    if a.cmd == "docs-sync":
+        from . import docsync
+        from .config import ROOT
+
+        ok = docsync.sync(ROOT / "docs" / "ARCHITECTURE.md", ROOT / "docs" / "benchmark.json", write=not a.check)
+        print(
+            "docs match the benchmark data"
+            if ok
+            else ("docs DRIFTED from docs/benchmark.json" if a.check else "docs updated from docs/benchmark.json")
+        )
+        return 0 if (ok or not a.check) else 1
     if a.cmd == "export":
         return _export(a)
     if a.cmd == "economics":
