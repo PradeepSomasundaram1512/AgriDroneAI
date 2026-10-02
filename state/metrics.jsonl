@@ -1,1 +1,2 @@
 {"ok": true, "ts": 1790913120.8524332, "day": 1, "targets": 0, "executed": 0, "dropped_by_safety": 0, "accuracy": 1.0, "psi": 0.0, "model_version": 1, "retrained": true, "water_saved_pct": 100.0, "chem_saved_pct": 100.0, "yield_index": 1.0, "plan_seconds": 0.005}
+{"ok": true, "ts": 1790914188.8990636, "day": 2, "targets": 0, "executed": 0, "dropped_by_safety": 0, "accuracy": 1.0, "psi": 0.165, "model_version": 1, "retrained": false, "water_saved_pct": 100.0, "chem_saved_pct": 100.0, "yield_index": 1.0, "plan_seconds": 0.006}
