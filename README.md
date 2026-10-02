@@ -36,7 +36,7 @@ PYTHONPATH=. .venv/bin/python -m agridrone.cli cycle -n 30 && python -m agridron
 - **Not built:** real sprayer/valve driver (stub), cloud deployment (needs your credentials and spend),
   regulatory approval, obstacle avoidance (trees, wires) and GNSS spoofing/jamming detection. Wind *physics* is validated by tests and the model, not in PX4 SITL (no wind source there); GPS loss is tested on real PX4 SITL.
 
-Explainer video for non-experts (4 min, narrated, rendered from the project's real data): `python video/make_video.py`; edit the narration in `video/script.py`.
+Explainer video for non-experts (4 min, narrated, rendered from the project's real data): `python video/make_video.py` (English) or `python video/make_video.py --lang ta` (Tamil, macOS "Vani" voice + Tamil subtitles); edit the narration in `video/script.py` / `video/script_ta.py`. Tamil text is shaped by macOS CoreText (`pip install pyobjc-framework-Quartz pyobjc-framework-CoreText`); the Tamil translation is AI-generated and should be reviewed by a native speaker.
 
 Docs: [Architecture](docs/ARCHITECTURE.md) · [Governance & incident response](docs/GOVERNANCE.md) · [Ground station](docs/GROUND_STATION.md) · [Changelog](CHANGELOG.md) · [Security](SECURITY.md)
 Optional: add repo secret `ANTHROPIC_API_KEY` to enable the bounded Claude advisor (it can only nudge thresholds within hard limits).
