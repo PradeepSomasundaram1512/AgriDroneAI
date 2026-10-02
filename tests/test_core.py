@@ -53,3 +53,12 @@ def test_corrupt_state_is_incident_not_crash(tmp_path):
     rec = run_cycle(pol, tmp_path)
     assert rec["ok"] is False
     assert any(r["kind"] == "incident" for r in store.read_jsonl("audit.jsonl", tmp_path))
+
+
+def test_dashboard_renders(tmp_path):
+    from agridrone.dashboard import render
+    pol = load_policy(); pol["field"]["size"] = 8
+    for _ in range(3):
+        run_cycle(pol, tmp_path)
+    out = render(tmp_path, pol)
+    assert "AgriDroneAI" in out and "<svg" in out

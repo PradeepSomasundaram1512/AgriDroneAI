@@ -29,7 +29,7 @@ flowchart LR
 | Adaptive ML pipeline | ✅ drift (PSI) + accuracy-triggered retraining, canary promote |
 | LLM command & control | ✅ bounded advisor (optional); flight commands never LLM-originated |
 | Reports | ✅ weekly/monthly, auto-published as issues |
-| Dashboard | ⏳ reports/issues for now; React/Mapbox UI is next |
+| Dashboard | ✅ static `docs/dashboard.html` (KPIs, NDVI heatmap, audit feed), regenerated each cycle; Mapbox/React UI later |
 | Edge IoT, real drones | ⏳ adapter interface only; needs hardware |
 | AWS/K8s/Terraform | ⏳ deliberately not provisioned (cost + credentials); Dockerfile is ready |
 

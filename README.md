@@ -10,6 +10,8 @@ PYTHONPATH=. .venv/bin/python -m agridrone.cli cycle -n 30
 PYTHONPATH=. .venv/bin/python -m agridrone.cli report weekly
 ```
 
+Dashboard: open `docs/dashboard.html` (regenerated every cycle).
+
 Docs: [Architecture](docs/ARCHITECTURE.md) · [Governance & incident response](docs/GOVERNANCE.md)
 Control surface: [config/policy.json](config/policy.json) (autonomy level, kill switch, thresholds).
 Optional: add repo secret `ANTHROPIC_API_KEY` to enable the bounded Claude advisor.
