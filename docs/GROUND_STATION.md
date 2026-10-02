@@ -28,6 +28,7 @@ Run the unattended daemon with a git credential that can push to this repo (depl
 
 ## What is and isn't validated
 - ✅ Flight logic (preflight, refusal, battery RTL, timeout, interlocks, queue rules): unit-tested with a fake vehicle.
-- ❌ `MavsdkLink` has **not** been run against PX4 SITL or a real aircraft. Do that first: `deploy/docker-compose.sitl.yml`.
+- 🟡 `MavsdkLink` is validated against **PX4 SITL** (`scripts/sitl_smoke.py`, arm64 image on Colima): normal flight, back-to-back sorties, flight after an autopilot restart, and a forced-timeout abort with return-to-launch. **Not** yet run on a real aircraft. Not yet exercised in SITL: low battery mid-flight, link loss, multi-drone.
+- SITL findings that shaped the adapter: after a reboot PX4 kept the previous mission's progress, so a new mission never started (now: clear mission + reset current waypoint before every upload); progress/in_air streams can replay stale state (now: completion is only believed after confirmed takeoff and a matching waypoint count, and the drone must confirm landing).
 - ❌ Payload (sprayer/valve) is a stub (`NullPayload` logs). Implement `PayloadDriver.trigger(action, cell)` for your hardware.
 - ❌ Not covered: wind/weather limits, obstacle avoidance, takeoff/landing sites, regulatory approval (Part 107/137 or local), pesticide rules, spotter/line-of-sight requirements. Do not fly over people or property you don't control.

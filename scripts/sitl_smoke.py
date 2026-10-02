@@ -2,7 +2,8 @@
   docker run --rm -d --name px4 -p 14540:14540/udp jonasvautherin/px4-gazebo-headless:latest
   PYTHONPATH=. AGRIDRONE_ARMED=1 python scripts/sitl_smoke.py
 PX4 SITL's default home is 47.397742, 8.545594, which matches config/policy.json hardware.origin."""
-import asyncio, os, sys, time
+import asyncio, logging, os, sys, time
+logging.basicConfig(level=logging.INFO, format="%(asctime)s %(message)s", datefmt="%H:%M:%S")
 from agridrone.config import load_policy
 from agridrone.hardware import FlightExecutor, NullPayload
 from agridrone.safety import Mission, mission_energy

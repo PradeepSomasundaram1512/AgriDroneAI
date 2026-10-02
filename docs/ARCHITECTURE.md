@@ -31,7 +31,7 @@ flowchart LR
 | LLM command & control | ✅ bounded advisor (optional); flight commands never LLM-originated |
 | Reports | ✅ weekly/monthly, auto-published as issues |
 | Dashboard | ✅ static `docs/dashboard.html` (KPIs, NDVI heatmap, audit feed), regenerated each cycle; Mapbox/React UI later |
-| Real drones | 🟡 PX4/MAVSDK adapter + unattended ground station built and unit-tested with a fake vehicle; **not yet run on SITL/hardware**; payload stubbed (docs/GROUND_STATION.md) |
+| Real drones | 🟡 PX4/MAVSDK adapter + unattended ground station built and unit-tested with a fake vehicle; validated on PX4 SITL, **not yet on real hardware**; payload stubbed (docs/GROUND_STATION.md) |
 | Edge IoT / real imagery | ⏳ needs hardware |
 | AWS/K8s/Terraform | ⏳ deliberately not provisioned (cost + credentials); Dockerfile is ready |
 

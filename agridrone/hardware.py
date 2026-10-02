@@ -8,12 +8,16 @@ Layers (so the safety-critical logic is testable without a drone):
                     wiring real actuation (servo/relay on the companion computer) is hardware-specific.
 Never imported by the cloud autopilot: only the ground station (docs/GROUND_STATION.md) uses it."""
 import asyncio
+import logging
 import math
 import os
 from dataclasses import dataclass, field
 
 from . import safety
 from .geo import cell_to_latlon
+
+
+log = logging.getLogger("agridrone.hardware")
 
 
 class PreflightError(Exception):
@@ -75,8 +79,11 @@ class MavsdkLink:
         nan = float("nan")
         items = [MI(lat, lon, alt, speed, False, nan, nan, MI.CameraAction.NONE, dwell_s, nan, 2.0, nan, nan,
                     MI.VehicleAction.NONE) for lat, lon, alt in waypoints]
-        await self.sys.mission.set_return_to_launch_after_mission(True)
-        await self.sys.mission.upload_mission(self._m.mission.MissionPlan(items))
+        m = self.sys.mission
+        await m.clear_mission()  # an autopilot that rebooted may still hold the previous sortie's mission/progress
+        await m.set_return_to_launch_after_mission(True)
+        await m.upload_mission(self._m.mission.MissionPlan(items))
+        await m.set_current_mission_item(0)
 
     async def start(self):
         await self.sys.action.arm()
@@ -144,21 +151,28 @@ class FlightExecutor:
         link = self.link_factory(self.hw["links"][mission.drone])
         reserve = self.fleet["min_reserve_pct"]
         try:
+            log.info("drone %s: connecting", mission.drone)
             await link.connect()
+            log.info("drone %s: connected, waiting for GPS/home lock", mission.drone)
             if not await link.ready():
                 return FlightResult(mission.drone, "refused", 0, total, "no GPS/home lock")
             pct = await link.battery_pct()
+            log.info("drone %s: lock ok, battery %s%%", mission.drone, pct)
             need = mission.energy_wh / self.fleet["battery_wh"] * 100 + reserve
             if pct is None or pct < need:
                 return FlightResult(mission.drone, "refused", 0, total, f"battery {pct}% < required {need:.0f}%")
             await link.upload(wps, self.hw.get("speed_m_s", 5.0), self.hw.get("dwell_s", 4))
+            log.info("drone %s: mission uploaded (%d waypoints), arming + starting", mission.drone, total)
             await link.start()
+            log.info("drone %s: started, waiting for takeoff", mission.drone)
             # Progress/in_air streams can replay STALE state from a previous mission, so completion is only
             # believed after takeoff is confirmed (found by SITL: a restart produced an instant false "completed").
             if not await link.wait_airborne(self.hw.get("takeoff_wait_s", 90)):
                 await self._abort(link)
                 return FlightResult(mission.drone, "aborted", 0, total, "no takeoff confirmed; RTL/land commanded")
+            log.info("drone %s: airborne, monitoring", mission.drone)
             res = await asyncio.wait_for(self._monitor(link, mission, total, reserve), self.hw.get("max_flight_s", 1200))
+            log.info("drone %s: mission %s (%d/%d), waiting for landing", mission.drone, res.status, res.completed, total)
             # the drone is only "done" once it is back on the ground; the next sortie must not start before that
             if not await link.wait_landed(self.hw.get("land_wait_s", 300)):
                 res.status, res.reason = "aborted", (res.reason + "; did not confirm landing").lstrip("; ")
@@ -174,6 +188,7 @@ class FlightExecutor:
         reached = 0
         async for cur, tot in link.progress():
             if tot != total:  # stale event from a different mission
+                log.warning("drone %s: ignoring stale progress %s/%s (expected %s waypoints)", mission.drone, cur, tot, total)
                 continue
             while reached < min(cur, total):  # waypoint `reached` was just completed
                 await self.payload.trigger(*reversed(mission.targets[reached]))
