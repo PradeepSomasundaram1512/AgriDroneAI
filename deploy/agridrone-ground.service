@@ -1,0 +1,18 @@
+# Install on the farm ground station (Linux):
+#   sudo cp deploy/agridrone-ground.service /etc/systemd/system/ && sudo systemctl enable --now agridrone-ground
+[Unit]
+Description=AgriDroneAI ground station (unattended)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+User=agridrone
+WorkingDirectory=/opt/AgriDroneAI
+# Physical interlock: remove this line to make the station incapable of flying (it will refuse and log).
+Environment=AGRIDRONE_ARMED=1
+ExecStart=/opt/AgriDroneAI/.venv/bin/agridrone ground-station --poll 300
+Restart=always
+RestartSec=15
+
+[Install]
+WantedBy=multi-user.target

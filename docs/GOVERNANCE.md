@@ -4,8 +4,8 @@
 | Level | Behaviour | Who can change it |
 |---|---|---|
 | `simulation` (default) | Missions execute against the built-in simulator only | repo owner |
-| `supervised` | Missions are written to `state/pending_missions.json`; a human approves before any hardware adapter acts | repo owner |
-| `autonomous` | A real adapter (PX4/MAVSDK) may actuate. **No adapter ships**; the agent logs `autonomous_unavailable` | repo owner, after a hardware pilot + regulatory sign-off |
+| `supervised` | Missions are queued in `state/queue.jsonl`; a human runs `agridrone fly --approve <id>` on the ground station | repo owner |
+| `autonomous` | Queue records are `approval: auto`; the farm ground station flies them unattended (needs `hardware.enabled` **and** `AGRIDRONE_ARMED=1` there; see GROUND_STATION.md) | repo owner, only after SITL + supervised pilot + regulatory sign-off |
 
 The agent never edits `policy.json`. It may only nudge thresholds inside hard bounds (`advisor.py`) via `state/threshold_overrides.json`, all logged.
 

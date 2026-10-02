@@ -14,7 +14,8 @@ flowchart LR
     PL --> SG[safety gate]
     SG -->|simulation| SIM[SimAdapter]
     SG -->|supervised| PEND[pending_missions.json → human]
-    SG -.autonomous: needs real adapter.-> HW[(PX4/MAVSDK)]
+    SG -->|supervised/autonomous| Q[state/queue.jsonl]
+    Q --> GS[ground station at farm] --> HW[(PX4/MAVSDK)]
     CY --> ADV[optional Claude advisor, bounded]
   end
   CY --> ST[(state/: farm, model, audit, metrics — in git)]
@@ -30,7 +31,8 @@ flowchart LR
 | LLM command & control | ✅ bounded advisor (optional); flight commands never LLM-originated |
 | Reports | ✅ weekly/monthly, auto-published as issues |
 | Dashboard | ✅ static `docs/dashboard.html` (KPIs, NDVI heatmap, audit feed), regenerated each cycle; Mapbox/React UI later |
-| Edge IoT, real drones | ⏳ adapter interface only; needs hardware |
+| Real drones | 🟡 PX4/MAVSDK adapter + unattended ground station built and unit-tested with a fake vehicle; **not yet run on SITL/hardware**; payload stubbed (docs/GROUND_STATION.md) |
+| Edge IoT / real imagery | ⏳ needs hardware |
 | AWS/K8s/Terraform | ⏳ deliberately not provisioned (cost + credentials); Dockerfile is ready |
 
 ## Path to production

@@ -1,0 +1,7 @@
+# Test the adapter against simulated PX4 (no hardware). ~2GB image download on first run.
+#   docker compose -f deploy/docker-compose.sitl.yml up -d
+#   AGRIDRONE_ARMED=1 agridrone fly --approve <queue id>   (with hardware.enabled=true in config/policy.json)
+services:
+  px4-sitl:
+    image: jonasvautherin/px4-gazebo-headless:latest
+    ports: ["14540:14540/udp"]

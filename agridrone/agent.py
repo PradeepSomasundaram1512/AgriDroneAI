@@ -72,11 +72,12 @@ def run_cycle(policy=None, state_dir=None, now=None):
             audit("safety_block", violations=violations)
         elif level == "simulation":
             executed = SimAdapter(farm).execute(missions)
-        elif level == "supervised":
-            save_json("pending_missions.json", [{"drone": m.drone, "alt": m.altitude_m, "targets": m.targets} for m in missions], state_dir)
-            audit("awaiting_approval", missions=len(missions))
-        else:
-            audit("autonomous_unavailable", detail="no hardware adapter configured; nothing actuated")
+        else:  # supervised / autonomous: cloud only QUEUES; the ground station at the farm flies
+            auto = level == "autonomous" and policy["hardware"].get("enabled", False)
+            store.append_jsonl("queue.jsonl", {
+                "id": f"day{farm.day}", "ts": now or time.time(), "approval": "auto" if auto else "human",
+                "missions": [{"drone": m.drone, "alt": m.altitude_m, "energy_wh": m.energy_wh, "targets": m.targets} for m in missions]}, state_dir)
+            audit("queued", id=f"day{farm.day}", missions=len(missions), approval="auto" if auto else "human")
 
         base_w, base_c = farm.blanket_usage()
         summary = {
