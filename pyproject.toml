@@ -1,6 +1,6 @@
 [project]
 name = "agridrone"
-version = "0.2.0"
+version = "0.3.0"
 description = "AgriDroneAI: autonomous precision-agriculture drone network (simulation-first)"
 requires-python = ">=3.11"
 dependencies = []
@@ -8,7 +8,8 @@ dependencies = []
 [project.optional-dependencies]
 llm = ["anthropic>=0.40"]
 hardware = ["mavsdk-grpc>=3"]
-dev = ["pytest>=8", "pytest-cov", "ruff", "bandit", "pip-audit"]
+imagery = ["rasterio>=1.4", "numpy>=1.26"]
+dev = ["pytest>=8", "pytest-cov", "ruff", "bandit", "pip-audit", "rasterio>=1.4", "numpy>=1.26"]
 
 [project.scripts]
 agridrone = "agridrone.cli:main"

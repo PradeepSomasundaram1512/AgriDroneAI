@@ -1,11 +1,13 @@
 """The autonomous operating loop: observe -> classify -> plan -> safety-gate -> act -> learn -> audit.
 One call to run_cycle() = one day of operation. Designed to be invoked by a scheduler (GitHub Actions)."""
 
+import os
 import random
 import time
 import traceback
 
-from . import advisor, model as M, planner, quality, safety, store, weather
+from . import advisor, fleet, imagery, planner, quality, safety, store, traffic, weather
+from . import model as M
 from .adapters import SimAdapter
 from .config import load_policy
 from .store import append_jsonl, load_json, save_json
@@ -75,6 +77,18 @@ def run_cycle(policy=None, state_dir=None, now=None):
             policy["field"].get("sensor_fault_rate", 0.0),
             policy.get("weather", {}).get("start_doy", 120),
         )
+        # real satellite data: refresh when stale (never raises), then seed the twin with the real field's spatial pattern
+        if not os.environ.get("AGRIDRONE_OFFLINE"):
+            st = imagery.refresh(policy, state_dir)
+            if st["status"] in ("updated", "unavailable", "error"):
+                audit("imagery", **st)
+        icfg = policy.get("imagery", {})
+        if icfg.get("init_field") and farm.init_scene is None and farm.day <= 7:
+            scenes = imagery.load_scenes(state_dir)
+            if scenes:
+                imagery.init_field(farm, scenes[-1])
+                farm.init_scene = scenes[-1].id
+                audit("twin_initialized_from_satellite", scene=scenes[-1].id, date=scenes[-1].date, valid_frac=scenes[-1].valid_frac)
         rng = random.Random(farm.seed * 1000 + farm.day)
         wx, forecast, wx_src = weather.get_weather(policy, farm.day + 1, state_dir)
         farm.step(wx)
@@ -161,11 +175,19 @@ def run_cycle(policy=None, state_dir=None, now=None):
         # --- plan, gate, act ---
         targets = planner.find_targets(farm, mdl if policy.get("model_enabled", True) else M.StressModel(), thr, forecast, obs)
         # hardware modes plan ONE sortie: a battery swap between sorties needs a human at the aircraft
+        sim_mode = policy["autonomy_level"] == "simulation"
+        batteries = fleet.Fleet.load(policy, state_dir)
+        overnight_wh, overnight_h = batteries.overnight()  # every pack is back to full at dawn
         missions = planner.plan(
-            targets, policy, sorties=policy["fleet"].get("sorties_per_day", 1) if policy["autonomy_level"] == "simulation" else 1
+            targets, policy, sorties=policy["fleet"].get("sorties_per_day", 1) if sim_mode else 1, allow_hold=sim_mode, fleet=batteries
         )
         missions, dropped = safety.repair(missions, policy)
-        violations = safety.validate(missions, policy)
+        traffic_reps = [  # trimming a route changes its timing: prove the final schedule is conflict-free
+            traffic.schedule([m for m in missions if m.sortie == k], policy, allow_hold=sim_mode)
+            for k in sorted({m.sortie for m in missions})
+        ]
+        energy = batteries.simulate(missions)  # flight-by-flight battery check incl. charging between sorties
+        violations = safety.validate(missions, policy) + energy["violations"]
         level = policy["autonomy_level"]
         executed = 0
         before = snapshot(farm)  # for the dashboard replay: the field as the drones found it
@@ -182,7 +204,16 @@ def run_cycle(policy=None, state_dir=None, now=None):
                     "ts": now or time.time(),
                     "approval": "auto" if auto else "human",
                     "missions": [
-                        {"drone": m.drone, "alt": m.altitude_m, "energy_wh": m.energy_wh, "sortie": m.sortie, "targets": m.targets}
+                        {
+                            "drone": m.drone,
+                            "alt": m.altitude_m,
+                            "energy_wh": m.energy_wh,
+                            "sortie": m.sortie,
+                            "t0": m.t0,
+                            "hold": m.hold,
+                            "pad": m.pad if m.pad >= 0 else m.drone,
+                            "targets": m.targets,
+                        }
                         for m in missions
                     ],
                 },
@@ -190,12 +221,23 @@ def run_cycle(policy=None, state_dir=None, now=None):
             )
             audit("queued", id=f"day{farm.day}", missions=len(missions), approval="auto" if auto else "human")
 
+        if not violations:
+            batteries.commit(energy)  # flown (or queued) day: end-of-day charge state and wear
+        batteries.save(state_dir)
         base_w, base_c = farm.blanket_usage()
         summary = {
             "day": farm.day,
             "targets": len(targets),
             "executed": executed,
             "sorties": len({m.sortie for m in missions}),
+            "fleet_energy_wh": energy["used_wh"],
+            "charged_between_flights_wh": energy["charged_wh"],
+            "overnight_charge_wh": round(overnight_wh),
+            "overnight_charge_hours": round(overnight_h, 1),
+            **batteries.summary(),
+            "traffic_min_ratio": min((r["min_ratio"] for r in traffic_reps if r.get("min_ratio") is not None), default=None),
+            "traffic_mode": "serialized" if any(r["mode"] == "serialized" for r in traffic_reps) else "concurrent",
+            "launch_stagger_s": max((r["max_delay_s"] for r in traffic_reps), default=0),
             "rain_mm": wx.rain_mm,
             "weather_source": wx_src,
             "sensors_flagged": dq["flagged"],
@@ -232,6 +274,10 @@ def run_cycle(policy=None, state_dir=None, now=None):
                         "alt": m.altitude_m,
                         "sortie": m.sortie,
                         "energy_wh": round(m.energy_wh, 1),
+                        "t0": m.t0,
+                        "hold": m.hold,
+                        "pad": m.pad if m.pad >= 0 else m.drone,
+                        "soc": next((r for r in energy["drones"].get(m.drone, []) if r["sortie"] == m.sortie), None),
                         "targets": [[c[0], c[1], a] for c, a in m.targets],
                     }
                     for m in missions

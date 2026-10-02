@@ -38,3 +38,11 @@ Run the unattended daemon with a git credential that can push to this repo (depl
 - Missions may contain **detour waypoints** (`action: "via"`) that route around no-fly zones. They are flown like any waypoint but never trigger the sprayer/valve payload.
 - The safety gate (and the ground station's own re-validation) rejects any flight **leg** that crosses a no-fly zone, not just targets inside one.
 - Hardware autonomy levels plan one sortie per queue record; multi-sortie planning is simulation-only.
+
+## Deconfliction on hardware
+- Each drone launches from **its own pad** (`pad_spacing_m` apart). The queue record carries each mission's `t0` (launch delay): the ground station keeps that drone **on the ground** for `t0` seconds before connecting, so a drone never climbs through another's path.
+- Hardware plans never contain pre-landing **holds** (the autopilot's return-to-launch cannot be delayed); the preflight refuses a plan that does.
+- The ground station re-runs the full 3D traffic check itself (via `safety.validate`) before flying; if it finds a conflict the flight is refused.
+- Battery: the preflight reads the real battery from telemetry and refuses a drone that cannot cover its mission plus the reserve; the planner's modelled charge is a plan, not a measurement.
+
+Re-verified on PX4 SITL after adding deconfliction (`scripts/sitl_multi.sh all 3`): the scheduler assigned launch delays of 6 s and 3 s, the executor held those drones on their pads, and all three drones completed 2/2.

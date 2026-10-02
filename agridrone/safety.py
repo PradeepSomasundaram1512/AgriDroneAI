@@ -5,6 +5,8 @@ cross a no-fly zone on its way to a legal target), vertical separation between d
 
 from dataclasses import dataclass, field
 
+from . import traffic
+
 PAD = 0.3  # lateral safety margin around a no-fly cell, in cell widths
 
 
@@ -15,6 +17,9 @@ class Mission:
     targets: list = field(default_factory=list)  # [(cell, action)]; action "via" = detour waypoint, no treatment
     energy_wh: float = 0.0
     sortie: int = 0  # missions with the same sortie index fly concurrently
+    t0: int = 0  # launch delay within the sortie (s), set by traffic.schedule
+    hold: int = 0  # loiter above the pad before descending (s), set by traffic.schedule
+    pad: int = -1  # launch pad index (default: the drone's own index)
 
 
 def mission_energy(start, targets, fleet):
@@ -93,6 +98,13 @@ def validate(missions, policy):
         for a, b in zip(sorted(alts), sorted(alts)[1:]):
             if b - a < fleet["min_separation_m"]:
                 v.append(f"sortie {s}: vertical separation {b - a}m < {fleet['min_separation_m']}m")
+        # time-resolved 3D check: catches climbs/descents/overflights that altitude layers alone cannot
+        rep = traffic.check([m for m in missions if m.sortie == s], policy, max_report=3)
+        for c in rep["conflicts"]:
+            v.append(
+                f"sortie {s}: drones {c['drones'][0]} and {c['drones'][1]} conflict at t={c['t']}s "
+                f"({c['horizontal_m']} m apart sideways, {c['vertical_m']} m vertically)"
+            )
     for m in missions:
         if m.energy_wh > usable:
             v.append(f"drone {m.drone} energy {m.energy_wh:.1f}Wh exceeds usable {usable:.1f}Wh")

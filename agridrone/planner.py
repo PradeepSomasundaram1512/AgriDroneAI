@@ -7,6 +7,7 @@
 Sortie 0 flies first and gets the most urgent work. Missions flying at the same time use distinct altitude layers."""
 
 from . import model as M
+from . import traffic
 from .safety import Mission, connect, mission_energy
 
 MAX_CONSECUTIVE_MISSES = 25  # stop searching once this many targets in a row fail to fit anywhere
@@ -89,15 +90,20 @@ def _two_opt(route, legs):
     return best
 
 
-def plan(targets, policy, charge=None, sorties=None):
-    """targets: [(priority, cell, action)]. charge: optional {drone: battery %} (default full). -> [Mission]."""
-    fleet, size = policy["fleet"], policy["field"]["size"]
+def plan(targets, policy, charge=None, sorties=None, allow_hold=True, fleet=None):
+    """targets: [(priority, cell, action)]. fleet: optional fleet.Fleet (battery state + charging); else every sortie starts full.
+    charge: legacy {drone: battery %} for sortie 0. -> [Mission]."""
+    fleet_cfg, size = policy["fleet"], policy["field"]["size"]
+    fleet_state = fleet
+    fleet = fleet_cfg
     nofly = {tuple(c) for c in policy["no_fly_cells"]}
     n, ns = fleet["drones"], sorties or fleet.get("sorties_per_day", 1)
     charge, legs, act_e = charge or {}, _Legs(fleet, nofly, size), fleet["wh_per_cell_action"]
 
     def usable(i, s):
-        return fleet["battery_wh"] * ((charge.get(i, 100) if s == 0 else 100) / 100 - fleet["min_reserve_pct"] / 100)
+        if fleet_state is not None:  # rechargeable fleet: what each battery can really spend on this sortie
+            return fleet_state.budget(i, s)
+        return fleet_cfg["battery_wh"] * ((charge.get(i, 100) if s == 0 else 100) / 100 - fleet_cfg["min_reserve_pct"] / 100)
 
     routes = {(s, i): [] for s in range(ns) for i in range(n)}
     energy = dict.fromkeys(routes, 0.0)
@@ -141,4 +147,9 @@ def plan(targets, policy, charge=None, sorties=None):
                 sortie=s,
             )
         )
-    return sorted(missions, key=lambda m: (m.sortie, m.drone))
+    missions = sorted(missions, key=lambda m: (m.sortie, m.drone))
+    for m in missions:
+        m.pad = m.drone  # each drone launches and lands on its own pad
+    for k in sorted({m.sortie for m in missions}):  # drones of one sortie fly together: schedule departures, prove no conflicts
+        traffic.schedule([m for m in missions if m.sortie == k], policy, allow_hold=allow_hold)
+    return missions

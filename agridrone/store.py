@@ -61,6 +61,7 @@ def save_farm(f: Farm, d=None):
         "obs_rng": _rng(f.obs_rng),
         "fault_rng": _rng(f.fault_rng),
         "start_doy": f.start_doy,
+        "init_scene": f.init_scene,
         "faults": [[x, y, v["mode"], v["start"], v["bias"], v["frozen"]] for (x, y), v in f.faults.items()],
         "cells": [
             [
@@ -91,6 +92,7 @@ def load_farm(seed, size, d=None, fault_rate=0.0, start_doy=120) -> Farm:
         water_used=data["water"],
         chem_used=data["chem"],
         start_doy=data.get("start_doy", 120),
+        init_scene=data.get("init_scene"),
     )
     f.rng, f.obs_rng = _load_rng(data["rng"]), (_load_rng(data["obs_rng"]) if "obs_rng" in data else random.Random(data["seed"] + 9001))
     f.fault_rng = _load_rng(data["fault_rng"]) if "fault_rng" in data else random.Random(data["seed"] + 31337)

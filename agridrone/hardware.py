@@ -164,6 +164,8 @@ class FlightExecutor:
             raise PreflightError("hardware.enabled is false in policy")
         if os.environ.get("AGRIDRONE_ARMED") != "1":
             raise PreflightError("physical interlock: AGRIDRONE_ARMED=1 not set on this ground station")
+        if any(m.hold for m in missions):
+            raise PreflightError("pre-landing holds cannot be flown on hardware (the return-to-launch timing cannot be delayed)")
         v = safety.validate(missions, self.policy)
         if v:
             raise PreflightError("; ".join(v))
@@ -319,4 +321,12 @@ class FlightExecutor:
     async def fly(self, missions, dry_run=False):
         if not dry_run:
             self.preflight_policy(missions)
-        return await asyncio.gather(*[self.fly_one(m, dry_run) for m in missions])
+        return await asyncio.gather(*[self._staggered(m, dry_run) for m in missions])
+
+    async def _staggered(self, m, dry_run):
+        """Launch times come from the traffic scheduler: a drone that must wait for another to clear the airspace waits here,
+        on the ground, before it even connects."""
+        if not dry_run and m.t0 > 0:
+            log.info("drone %s: holding on the pad for %ss (airspace deconfliction)", m.drone, m.t0)
+            await asyncio.sleep(m.t0 * self.hw.get("launch_stagger_scale", 1.0))
+        return await self.fly_one(m, dry_run)

@@ -32,3 +32,10 @@ The agent never edits `policy.json`. It may only nudge thresholds inside hard bo
 - Simulator upgrades **migrate state** (`state/archive-v1/`, `state/version.json`) rather than mixing physics.
 - Sensor faults are detected, repaired from neighbours, and reported (`sensor_faults` in the audit log; sensors flagged for maintenance appear on the dashboard).
 - Hardware modes plan a **single sortie**: a battery swap between flights needs a human at the aircraft.
+
+## Added in 0.3.0
+- **Airspace safety is part of the safety gate**: a plan is rejected if the 3D replay finds two drones within the clearance, whatever the planner proposed.
+- **Battery feasibility is checked flight by flight** (including charging between sorties); a plan that would breach the reserve is blocked and logged as `safety_block`.
+- **Real satellite data** is refreshed by the autopilot only when stale (default 5 days), never blocks a cycle, and is clearly labelled real vs simulated everywhere.
+- New policy knobs are validated: `fleet.charging.*`, `fleet.pad_spacing_m` (>= 1.5x clearance), speeds, `imagery.*`, `field.location`.
+- `state/fleet.json` (battery state) is integrity-checked before every commit.

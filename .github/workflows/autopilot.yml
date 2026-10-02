@@ -17,14 +17,14 @@ jobs:
       - uses: actions/setup-python@v5
         with: {python-version: "3.13", cache: pip}
       - name: Tests first (never operate on a broken build)
-        run: pip install pytest pytest-cov && AGRIDRONE_OFFLINE=1 pytest -q --cov
+        run: pip install pytest pytest-cov numpy rasterio && AGRIDRONE_OFFLINE=1 pytest -q --cov
       - name: Validate policy
         run: python -c "from agridrone.config import load_policy; load_policy(); print('policy OK')"
       - name: Operating cycle
         env:
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}   # optional; advisor is off without it
         run: |
-          pip install anthropic || true
+          pip install anthropic || true   # optional advisor
           python -m agridrone.cli cycle -n 1
           python -m agridrone.cli dashboard
       - name: Verify state integrity (blocks the commit if anything is corrupt)

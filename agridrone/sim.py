@@ -44,6 +44,7 @@ class Farm:
     last_weather: Weather = None
     faults: dict = field(default_factory=dict)  # {cell: {"mode": dead|stuck|bias|spike, "start": day, "val": ...}}
     fault_rng: random.Random = None
+    init_scene: str = None  # id of the satellite scene that seeded this twin's spatial variability
 
     @classmethod
     def create(cls, size=24, seed=7, start_doy=120, fault_rate=0.0):

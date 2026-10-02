@@ -5,7 +5,12 @@
   "field": {
     "size": 24,
     "cell_m": 50,
-    "seed": 7
+    "seed": 7,
+    "location": {
+      "lat": 41.98,
+      "lon": -93.7,
+      "_note": "SW corner of the field (x east, y north). Default: Iowa row-crop land for a real-data demo; set to your own field."
+    }
   },
   "fleet": {
     "drones": 3,
@@ -14,7 +19,20 @@
     "wh_per_cell_action": 1.5,
     "min_reserve_pct": 25,
     "min_separation_m": 15,
-    "sorties_per_day": 3
+    "sorties_per_day": 3,
+    "speed_ms": 5.0,
+    "climb_rate_ms": 3.0,
+    "descent_rate_ms": 2.0,
+    "dwell_s": 4.0,
+    "horizontal_clearance_m": 20.0,
+    "pad_spacing_m": 40.0,
+    "charging": {
+      "mode": "charge",
+      "rate_w": 90,
+      "turnaround_min": 45,
+      "swap_min": 3,
+      "_note": "charge = recharge in place between sorties (rate_w watts for turnaround_min); swap = spare batteries, instant full battery. Overnight the fleet always charges to full."
+    }
   },
   "no_fly_cells": [
     [
@@ -70,5 +88,12 @@
     "start_doy": 120,
     "_note": "synthetic = seasonal generator (default, season starts at deployment). open-meteo = real data for the lat/lon; use it when day 1 is a real planting date."
   },
-  "model_enabled": true
+  "model_enabled": true,
+  "imagery": {
+    "enabled": true,
+    "max_age_days": 5,
+    "lookback_days": 60,
+    "_note": "enabled: the autopilot refreshes Sentinel-2 imagery when the cache is >max_age_days old (needs the 'imagery' extra and network).",
+    "init_field": true
+  }
 }

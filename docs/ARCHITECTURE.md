@@ -93,3 +93,55 @@ Simulator physics are simplified (single crop, one soil layer, no wind/disease/h
 - Versioned state migration (`state/version.json`): a simulator upgrade archives old state instead of silently mixing models.
 - CI: ruff lint + format, tests on Python 3.11/3.12/3.13 with an 85% coverage gate (currently 95%), bandit (medium+ fails), pip-audit, Docker build + run as non-root.
 - Planner: incremental insertion cost with cached leg costs; 300+ candidate patches planned in ~0.5 s.
+
+
+## Airspace safety (drones must never clash)
+Altitude layers alone only protect drones in *level* flight; the dangerous moments are climbs, descents and overflights of a pad.
+`traffic.py` therefore enforces four layers, and the safety gate (`safety.validate`) re-verifies them on every plan:
+1. **One launch pad per drone**, `pad_spacing_m` (40 m) apart (policy-validated to be >= 1.5x the clearance).
+2. **Distinct cruise altitudes** for drones flying together, >= `min_separation_m` (15 m) apart.
+3. **A time-resolved 3D replay**: each mission's full trajectory (climb, legs, hover, detours, return, hold, descent, with real speeds) is stepped
+   second by second for all drones flying together. A *conflict* is both closer than `horizontal_clearance_m` (20 m) sideways **and** closer than
+   15 m vertically at the same instant. Any conflict rejects the plan.
+4. **A scheduler** staggers launches (highest altitude first) and adds pre-landing holds until the replay shows zero conflicts. If no concurrent
+   schedule exists it **flies one drone at a time**, which cannot overlap in time and is safe by construction.
+
+Hardware modes plan one sortie and allow launch stagger only (no holds: return-to-launch timing cannot be delayed); the ground station sleeps each drone's
+`t0` on the ground before connecting, and the preflight refuses any plan that needs a hold. Verified by tests on adversarial crossings, random fleets of 2/3/5
+drones (always conflict-free, margin >= 1.0x) and the serialized fallback. Real planner output without the scheduler *does* contain conflicts, which is why
+the check exists. **Not modelled:** wind, GPS error beyond the clearance margin, drones outside this fleet, birds, communication loss of the whole fleet.
+
+## Rechargeable fleet
+`fleet.py` gives every drone a persistent battery (`state/fleet.json`): state of charge, equivalent full cycles, health.
+- **Charging between flights** (`fleet.charging.mode: charge`): the pack regains `rate_w` x `turnaround_min` of energy; **or** `swap`: instant full spare pack.
+  The planner budgets each sortie from this (a slow charger really shrinks later flights); `simulate()` re-walks the final plan flight by flight and the
+  agent blocks any plan that would drop a battery below the 25% reserve.
+- **Overnight**: everything charges to full (the report says how many hours that needs at the charger's power).
+- **Wear**: capacity fades 0.04% per equivalent full cycle (floor 80%), so planning uses each drone's *current* capacity.
+
+Effect of the charging setup (`scripts/sweep_charging.py`; 120-day season, 3 farms, 3 drones x 3 flights/day):
+
+| Charging | Yield | Water (mm) | Pack health after 120 days |
+|---|---|---|---|
+| spare packs (swap) | 0.997 | 128 | 94.7% |
+| charger 200 W | 0.997 | 128 | 94.7% |
+| charger 90 W (default) | 0.991 | 118 | 94.8% |
+| charger 40 W | 0.951 | 79 | 96.8% |
+| charger 20 W | 0.938 | 65 | 97.4% |
+
+Rule of thumb from the simulation: ~90 W per drone is the practical minimum for a 100 Wh pack; below that, later flights cannot clear a dry spell.
+The wear model is a simplification (no temperature, depth-of-discharge or calendar aging).
+
+## Satellite imagery (real data)
+`imagery.py` ingests **real Sentinel-2 L2A** (10 m, ~5-day revisit, free, no key) through the Earth Search STAC API and windowed reads of Cloud-Optimized
+GeoTIFFs: only the field's few hundred KB, never the tile. Clouds, shadows, cirrus, snow and no-data are masked **before** averaging to the patch grid, so a
+scene that is 55% cloudy over the tile but clear over the field is still used. Radiometry honours each item's own `earthsearch:boa_offset_applied` flag
+(blindly applying the -0.1 offset gave impossible NDVI > 1 on real tiles; found by testing on live data). Outputs: NDVI (vigor) and NDMI (leaf water),
+robust-z low-vigor zones, change vs the previous scene, ranked "scout these patches first", and a time series; all shown on the dashboard as **real, not simulated**.
+Two uses beyond display: the digital twin is seeded with the real field's spatial patchiness (`init_field`), and `crosscheck()` compares ground-sensor NDVI against
+the satellite as an independent reference (the bias-fault gap the sensor-quality layer cannot close on its own).
+Optional extra: `pip install "agridrone[imagery]"` (rasterio + numpy). Every failure degrades to "no imagery today"; the autopilot never stops for it.
+Verified on live data (`AGRIDRONE_LIVE=1 pytest tests/test_imagery.py -k live`): 9 real scenes (Aug-Sep 2026) for the default Iowa field, mean NDVI 0.79-0.84,
+a believable late-season decline, 100% of the field clear in every kept scene.
+**Limits:** satellite NDVI is a ~10 m average and may be days old; there is no ground truth for real pixels, so the stress *classifier* is not trained or scored on real
+imagery (the zone/scouting analysis is unsupervised); cloud masking depends on Sentinel-2's SCL layer; the default field location is an Iowa row-crop area for demonstration; set your own.

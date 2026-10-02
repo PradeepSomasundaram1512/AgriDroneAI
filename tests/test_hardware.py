@@ -67,7 +67,7 @@ class FakeLink:
 
 def pol(**hw):
     p = load_policy()
-    p["hardware"].update(enabled=True, **hw)
+    p["hardware"].update({"enabled": True, "launch_stagger_scale": 0.0, **hw})
     return p
 
 
@@ -282,3 +282,40 @@ def test_dead_link_hangs_are_bounded_telemetry_silence_aborts():
     )
     r = asyncio.run(asyncio.wait_for(e.fly([mission()]), 5))[0]
     assert r.status == "aborted" and "link lost" in r.reason and "could NOT be sent" in r.reason
+
+
+def test_hold_before_landing_is_refused_on_hardware():
+    m = mission()
+    m.hold = 12
+    m.energy_wh = 20.0
+    with pytest.raises(PreflightError, match="holds"):
+        asyncio.run(ex()[0].fly([m]))
+
+
+def test_launch_stagger_keeps_a_drone_on_the_ground_until_its_slot():
+    import time
+
+    starts = {}
+
+    class Timed(FakeLink):
+        async def connect(self):
+            starts[self.addr] = time.monotonic()
+
+    p = pol(launch_stagger_scale=0.05)
+    a, b = mission(drone=0, alt=30), mission(drone=1, alt=50, targets=(((7, 5), "irrigate"),))
+    a.t0, b.t0 = 0, 8  # 8 s of airspace deconfliction x 0.05 = 0.4 s here
+    asyncio.run(FlightExecutor(p, link_factory=lambda addr: Timed(addr), payload=NullPayload()).fly([a, b]))
+    first, second = sorted(starts.values())
+    assert second - first >= 0.3
+
+
+def test_ground_station_roundtrips_the_schedule_and_pad():
+    from agridrone.ground_station import to_missions
+
+    rec = {
+        "missions": [
+            {"drone": 1, "alt": 50, "energy_wh": 10.0, "sortie": 0, "t0": 6, "hold": 0, "pad": 1, "targets": [[[5, 5], "irrigate"]]}
+        ]
+    }
+    m = to_missions(rec)[0]
+    assert (m.t0, m.hold, m.pad, m.drone) == (6, 0, 1, 1)

@@ -13,7 +13,16 @@ from .hardware import FlightExecutor, PreflightError
 
 def to_missions(rec):
     return [
-        safety.Mission(m["drone"], m["alt"], [(tuple(c), a) for c, a in m["targets"]], m["energy_wh"], m.get("sortie", 0))
+        safety.Mission(
+            m["drone"],
+            m["alt"],
+            [(tuple(c), a) for c, a in m["targets"]],
+            m["energy_wh"],
+            m.get("sortie", 0),
+            m.get("t0", 0),
+            m.get("hold", 0),
+            m.get("pad", -1),
+        )
         for m in rec["missions"]
     ]
 

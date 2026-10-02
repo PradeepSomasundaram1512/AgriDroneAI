@@ -26,6 +26,12 @@ def test_shipped_policy_is_valid():
         (lambda p: p["field"].update(size=2), "field.size"),
         (lambda p: p.update(kill_switch="no"), "kill_switch"),
         (lambda p: p["hardware"].update(enabled=True), "hardware"),
+        (lambda p: p["fleet"].update(pad_spacing_m=10), "pad_spacing_m"),
+        (lambda p: p["fleet"].update(horizontal_clearance_m=2), "horizontal_clearance_m"),
+        (lambda p: p["fleet"]["charging"].update(mode="teleport"), "charging.mode"),
+        (lambda p: p["fleet"]["charging"].update(rate_w=0), "rate_w"),
+        (lambda p: p["fleet"].update(climb_rate_ms=-1), "climb_rate_ms"),
+        (lambda p: p["field"].update(location={"lat": 999, "lon": 0}), "imagery.enabled needs field.location"),
     ],
 )
 def test_bad_policy_is_rejected_with_a_clear_message(mutate, needle):
@@ -66,3 +72,14 @@ def test_verify_catches_nan_and_wrong_cell_count_and_bad_jsonl(tmp_path):
     assert any("cells" in x for x in probs) and any("audit.jsonl" in x for x in probs)
     (tmp_path / "x.json").write_text('{"v": NaN}')
     assert any("NaN" in x for x in verify(tmp_path))
+
+
+def test_verify_catches_an_impossible_battery_state(tmp_path):
+    p = pol()
+    p["field"]["size"] = 8
+    run_cycle(p, tmp_path)
+    assert verify(tmp_path) == []
+    fd = json.loads((tmp_path / "fleet.json").read_text())
+    fd["drones"][0]["soc_wh"] = 5000
+    (tmp_path / "fleet.json").write_text(json.dumps(fd))
+    assert any("fleet.json" in x for x in verify(tmp_path))

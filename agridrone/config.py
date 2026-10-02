@@ -42,6 +42,28 @@ def validate_policy(p: dict) -> dict:
     need(isinstance(fl.get("sorties_per_day", 1), int) and 1 <= fl.get("sorties_per_day", 1) <= 10, "fleet.sorties_per_day must be 1..10")
     for k in ("wh_per_cell_move", "wh_per_cell_action"):
         need(num(fl.get(k)) and fl[k] > 0, f"fleet.{k} must be > 0")
+    for k in ("speed_ms", "climb_rate_ms", "descent_rate_ms"):
+        need(num(fl.get(k, 1)) and fl.get(k, 1) > 0, f"fleet.{k} must be > 0")
+    hc, pad = fl.get("horizontal_clearance_m", 20), fl.get("pad_spacing_m", 40)
+    need(num(hc) and hc >= 5, "fleet.horizontal_clearance_m must be >= 5")
+    need(
+        num(pad) and num(hc) and pad >= hc * 1.5,
+        "fleet.pad_spacing_m must be at least 1.5x horizontal_clearance_m "
+        "(pads closer than that put drones inside each other's safety zone)",
+    )
+    ch = fl.get("charging", {})
+    need(ch.get("mode", "charge") in ("charge", "swap"), "fleet.charging.mode must be 'charge' or 'swap'")
+    need(num(ch.get("rate_w", 90)) and ch.get("rate_w", 90) > 0, "fleet.charging.rate_w must be > 0")
+    need(num(ch.get("turnaround_min", 45)) and ch.get("turnaround_min", 45) >= 1, "fleet.charging.turnaround_min must be >= 1")
+    need(num(ch.get("swap_min", 3)) and ch.get("swap_min", 3) >= 0, "fleet.charging.swap_min must be >= 0")
+    im = p.get("imagery", {})
+    if im.get("enabled"):
+        loc = f.get("location", {})
+        need(
+            num(loc.get("lat")) and -90 <= loc["lat"] <= 90 and num(loc.get("lon")) and -180 <= loc["lon"] <= 180,
+            "imagery.enabled needs field.location with a valid lat/lon",
+        )
+        need(num(im.get("max_age_days", 5)) and im.get("max_age_days", 5) >= 1, "imagery.max_age_days must be >= 1")
     size = f.get("size", 0) if isinstance(f.get("size"), int) else 0
     for c in p.get("no_fly_cells", []):
         need(

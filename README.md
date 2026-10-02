@@ -3,7 +3,7 @@
 Autonomous precision-agriculture drone network. **Simulation-first, self-operating, and honest about what is proven.**
 
 A scheduled GitHub Actions autopilot runs one operating cycle a day: read sensors → repair bad data → classify crop stress →
-plan multi-drone, multi-flight missions (battery swaps, no-fly detours) → safety-gate them → act → retrain on drift → audit.
+plan multi-drone, multi-flight missions (own pads, 3D collision-checked, rechargeable batteries, no-fly detours) → safety-gate them → act → retrain on drift → audit.
 State is verified and committed to git, reports are published as issues, incidents open themselves, and a watchdog notices
 if the autopilot goes silent. No person (or Claude session) has to stay online.
 
@@ -18,19 +18,21 @@ if the autopilot goes silent. No person (or Claude session) has to stay online.
 See [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md#benchmark) for the table and caveats. Reproduce with:
 ```bash
 python -m venv .venv && .venv/bin/pip install -e ".[dev]"
-PYTHONPATH=. .venv/bin/pytest -q --cov          # 72 tests, 95% coverage, gate at 85%
+PYTHONPATH=. .venv/bin/pytest -q --cov          # 110+ tests, gate at 85% coverage
 PYTHONPATH=. .venv/bin/python scripts/benchmark.py 120 6
 PYTHONPATH=. .venv/bin/python scripts/eval_model.py      # stress model scored against the whole field
 PYTHONPATH=. .venv/bin/python scripts/eval_quality.py    # sensor-fault detector recall/false alarms
+PYTHONPATH=. .venv/bin/python scripts/sweep_charging.py  # what the charger speed costs in yield
+PYTHONPATH=. .venv/bin/python -m agridrone.cli imagery fetch && python -m agridrone.cli imagery map   # real Sentinel-2 (needs the 'imagery' extra)
 PYTHONPATH=. .venv/bin/python -m agridrone.cli cycle -n 30 && python -m agridrone.cli dashboard
 ```
 
 ## What is real and what is not
-- **Real:** the control software, safety gate, planner, data-quality layer, model lifecycle, autopilot, CI, container, and the PX4 adapter
+- **Real:** the control software, safety gate, 3D collision checker, planner, battery/charging model, data-quality layer, model lifecycle, autopilot, CI, container, **real Sentinel-2 satellite ingestion**, and the PX4 adapter
   (flown in PX4 SITL: normal, restart, low battery, link loss, 3 concurrent drones).
-- **Simulated:** the farm itself (weather is synthetic or live from Open-Meteo), sensors and the crop. Yield/water/spray numbers are
+- **Simulated:** the farm itself (weather is synthetic or live from Open-Meteo), ground sensors and the crop (the satellite panel is real data of a real field, but there is no ground truth to score the classifier on). Yield/water/spray numbers are
   **simulator outputs, not field results**. A hardware pilot is required before any real-world claim.
-- **Not built:** real imagery ingestion, real sprayer/valve driver (stub), cloud deployment (needs your credentials and spend),
+- **Not built:** real sprayer/valve driver (stub), cloud deployment (needs your credentials and spend),
   regulatory approval, wind/GPS-loss handling, obstacle avoidance.
 
 Docs: [Architecture](docs/ARCHITECTURE.md) · [Governance & incident response](docs/GOVERNANCE.md) · [Ground station](docs/GROUND_STATION.md) · [Changelog](CHANGELOG.md) · [Security](SECURITY.md)

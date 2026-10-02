@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.3.0
+- **Collision avoidance**: per-drone launch pads, time-resolved 3D separation replay, launch staggering / pre-landing holds, one-at-a-time fallback; enforced by the safety gate and the ground station.
+- **Rechargeable drones**: persistent state of charge, charging or pack swap between flights, overnight recharge, battery wear; planner budgets from it and plans are verified flight by flight.
+- **Real satellite imagery** (Sentinel-2 via STAC + COG windowed reads, cloud-masked, NDVI/NDMI, zones, change detection, scouting list), dashboard panel, twin seeding, sensor cross-check.
+- Dashboard: pads, safety rings, charging bars, airspace + fleet panels, satellite view.
+- Policy validation for all new knobs; `fleet.json` integrity check; 110+ tests.
+
 ## 0.2.0
 - **Honest benchmark** (`scripts/benchmark.py`): paired strategies on identical weather (separate weather/sensor RNG streams); replaced the strawman baseline.
 - **Digital twin v2**: soil water balance (rain, FAO-56-style ET, drainage, spatially varying soil), temperature-driven spreading pests, crop growth curve,

@@ -47,6 +47,11 @@ def verify(state_dir=None):
             if not (0 <= row[3] <= 0.6 and 0 <= row[4] <= 1.0 and 0 <= row[5] <= 1.0 and 0 <= row[2] <= 1.0):
                 problems.append(f"farm.json: patch {row[:2]} has out-of-range state")
                 break
+    fleet_f = d / "fleet.json"
+    if fleet_f.exists() and not any("fleet.json" in p for p in problems):
+        for i, x in enumerate(json.loads(fleet_f.read_text()).get("drones", [])):
+            if not (0 <= x.get("soc_wh", -1) <= 1000 and 0.5 <= x.get("health", 0) <= 1.0001 and x.get("cycles", -1) >= 0):
+                problems.append(f"fleet.json: drone {i} has an impossible battery state {x}")
     model = d / "model.json"
     if model.exists() and not any("model.json" in p for p in problems):
         md = json.loads(model.read_text())

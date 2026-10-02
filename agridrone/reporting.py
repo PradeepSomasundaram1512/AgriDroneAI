@@ -21,6 +21,35 @@ def _stats(rows):
     }
 
 
+def _satellite_section(state_dir):
+    """Real Sentinel-2 findings, clearly separated from the simulator metrics. Empty if no imagery has been fetched."""
+    from . import imagery
+
+    try:
+        scenes = imagery.load_scenes(state_dir)
+    except (ValueError, TypeError, KeyError):
+        return []
+    if not scenes:
+        return []
+    a = imagery.analyze(scenes)
+    lat = a["latest"]
+    out = [
+        "## Satellite view (REAL Sentinel-2 data, not simulated)",
+        f"- Latest clear pass {lat['date']}: {round(100 * lat['valid_frac'])}% of the field visible; mean NDVI {a['ndvi']['mean']} "
+        f"(range {a['ndvi']['min']} to {a['ndvi']['max']}).",
+    ]
+    out.append(
+        f"- {len(a['zones'])} unusually weak area(s); largest {a['zones'][0]['cells']} patches around {tuple(a['zones'][0]['centre'])}."
+        if a["zones"]
+        else "- No unusually weak areas detected."
+    )
+    if a["declining"]:
+        out.append(f"- {a['declining']} patches lost > 0.10 NDVI since the previous pass.")
+    if a["scouting"]:
+        out.append("- Scout first: " + ", ".join(str(tuple(t["cell"])) for t in a["scouting"][:5]) + ".")
+    return out + [""]
+
+
 def _flag(v, ok):
     return "✅" if ok else "⚠️"
 
@@ -40,7 +69,7 @@ def build_report(kind="weekly", state_dir=None, window=None):
             "## Headline",
             f"Over the last {s['cycles']} operating cycles the system actuated {s['executed']} field actions "
             f"({l.get('water_saved_pct', 0)}% less water and {l.get('chem_saved_pct', 0)}% less agrochemical than a simulated "
-            "weekly blanket-treatment baseline; "
+            "fixed schedule (every patch irrigated weekly and sprayed fortnightly); "
             f"simulated yield index {l.get('yield_index', '-')}).",
             "",
             "## Metrics vs targets",
@@ -57,6 +86,9 @@ def build_report(kind="weekly", state_dir=None, window=None):
             "## Model & safety",
             f"- Model version {l.get('model_version', '-')}; retrained {s['retrains']}× in window; drift PSI {l.get('psi', '-')}.",
             f"- Safety gate removed {s['blocked']} unsafe/unaffordable targets (no-fly zones, battery reserve).",
+        ]
+        + _satellite_section(state_dir)
+        + [
             "## Incidents",
         ]
         + ([f"- {e}" for e in s["incidents"]] or ["- none"])
