@@ -1,0 +1,19 @@
+[project]
+name = "agridrone"
+version = "0.1.0"
+description = "AgriDroneAI: autonomous precision-agriculture drone network (simulation-first)"
+requires-python = ">=3.11"
+dependencies = []
+
+[project.optional-dependencies]
+llm = ["anthropic>=0.40"]
+dev = ["pytest>=8"]
+
+[project.scripts]
+agridrone = "agridrone.cli:main"
+
+[tool.setuptools]
+packages = ["agridrone"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

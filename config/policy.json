@@ -1,0 +1,10 @@
+{
+  "autonomy_level": "simulation",
+  "_autonomy_levels": "simulation = actions run only against the simulator; supervised = missions are queued in state/pending_missions.json for human approval; autonomous = adapter may actuate (requires hardware adapter + explicit human change to this file)",
+  "kill_switch": false,
+  "field": {"size": 24, "cell_m": 50, "seed": 7},
+  "fleet": {"drones": 3, "battery_wh": 100, "wh_per_cell_move": 0.8, "wh_per_cell_action": 1.5, "min_reserve_pct": 25, "min_separation_m": 15},
+  "no_fly_cells": [[0,0],[0,1],[1,0],[1,1]],
+  "thresholds": {"ndvi_stress": 0.45, "moisture_irrigate": 0.30, "pest_spray": 0.55, "psi_drift": 0.25, "min_accuracy": 0.90},
+  "slo": {"uptime_pct": 99.0, "plan_seconds": 300}
+}

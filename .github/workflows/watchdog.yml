@@ -1,0 +1,21 @@
+# Dead-man's switch: if the autopilot has not produced a metrics record in 36h, raise an incident.
+name: Watchdog
+on:
+  schedule: [{cron: "30 */12 * * *"}]
+  workflow_dispatch:
+permissions: {contents: read, issues: write}
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Check heartbeat
+        env: {GH_TOKEN: "${{ github.token }}"}
+        run: |
+          [ -f state/metrics.jsonl ] || { echo "no metrics yet"; exit 0; }
+          LAST=$(tail -1 state/metrics.jsonl | python3 -c "import sys,json;print(int(json.load(sys.stdin)['ts']))")
+          AGE=$(( $(date +%s) - LAST ))
+          echo "heartbeat age: ${AGE}s"
+          if [ $AGE -gt 129600 ]; then
+            gh issue create --title "Watchdog: autopilot silent for >36h" --label incident --body "Last cycle ${AGE}s ago. Check Actions tab; scheduled workflows are disabled after 60 days of repo inactivity." || true
+          fi
