@@ -7,6 +7,60 @@ from .reporting import build_report
 from datetime import UTC
 
 
+def _export(a):
+    from pathlib import Path
+
+    from . import export
+    from .config import load_policy
+    from .safety import Mission
+    from .store import load_json
+
+    pol = load_policy()
+    rec = load_json("last_mission.json", None)
+    if not rec or not rec.get("missions"):
+        print("no flights recorded yet (state/last_mission.json)")
+        return 1
+    ms = [
+        Mission(
+            m["drone"],
+            m["alt"],
+            [((c[0], c[1]), c[2]) for c in m["targets"]],
+            m.get("energy_wh", 0),
+            m.get("sortie", 0),
+            m.get("t0", 0),
+            m.get("hold", 0),
+            m.get("pad", -1),
+        )
+        for m in rec["missions"]
+        if (m.get("fate") or {}).get("status") != "cancelled"
+    ]
+    out = Path(a.out) if a.out else Path("exports") / f"day{rec['day']}"
+    files = export.write_all(ms, pol, out)
+    print(f"{len(ms)} flights -> {out}/")
+    for f in files:
+        print("  ", f.name)
+    return 0
+
+
+def _economics(a):
+    import json
+
+    from . import economics
+    from .config import ROOT, load_policy
+
+    pol = load_policy()
+    bench = json.loads((ROOT / "docs" / "benchmark.json").read_text())
+    ha = bench["patches"] * pol["economics"]["patch_ha"]
+    print(f"{bench['patches']} patches ({ha:.0f} ha), {bench['days']}-day season, PLACEHOLDER prices (policy.economics)\n")
+    print(f"{'strategy':26s} {'revenue':>10s} {'water':>8s} {'spray':>8s} {'fleet':>8s} {'profit':>10s} {'$/ha':>8s}")
+    for r in economics.compare(bench, pol, a.drones):
+        cols = (r["revenue"], r["water_cost"], r["spray_cost"], r["fleet_cost"], r["profit"])
+        print(f"{r['name']:26s} " + " ".join(f"{v:>{w},}" for v, w in zip(cols, (10, 8, 8, 8, 10))) + f" {r['profit_per_ha']:>8}")
+    pb = economics.payback_days(pol, bench, a.drones)
+    print(f"\nfleet payback vs the fixed schedule: {'never (under these prices)' if pb is None else f'{pb} days of operation'}")
+    return 0
+
+
 def _imagery(a):
     import json
 
@@ -52,6 +106,13 @@ def main(argv=None):
     im = sub.add_parser("imagery", help="real Sentinel-2 satellite imagery for the field")
     im.add_argument("action", choices=["fetch", "analyze", "map"])
     im.add_argument("--days", type=int, default=60)
+    ex = sub.add_parser("export", help="write the latest flights as QGroundControl .plan files + GeoJSON/CSV prescription map")
+    ex.add_argument("--out", default=None, help="output folder (default: exports/day<N>)")
+    ec = sub.add_parser("economics", help="profit per strategy from the measured benchmark (placeholder prices in policy.economics)")
+    ec.add_argument("--drones", type=int, default=3)
+    sub.add_parser("brief", help="today's plain-language briefing")
+    ak = sub.add_parser("ask", help="ask the farm a question in plain English (rules; Claude too if ANTHROPIC_API_KEY is set)")
+    ak.add_argument("question", nargs="+")
     sub.add_parser("verify", help="check state files are healthy (autopilot runs this before committing)")
     sub.add_parser("dashboard", help="write docs/dashboard.html")
     r = sub.add_parser("report")
@@ -74,6 +135,21 @@ def main(argv=None):
         from .ground_station import daemon
 
         daemon(a.poll, sync=not a.no_git, dry_run=a.dry_run)
+    if a.cmd in ("brief", "ask"):
+        from . import briefing
+        from .dashboard import build_data
+
+        data = build_data()
+        if a.cmd == "brief":
+            print("\n".join("- " + s for s in briefing.sentences(data)))
+        else:
+            text, src = briefing.ask(" ".join(a.question), data)
+            print(f"{text}\n\n[answered by: {src}]")
+        return 0
+    if a.cmd == "export":
+        return _export(a)
+    if a.cmd == "economics":
+        return _economics(a)
     if a.cmd == "imagery":
         return _imagery(a)
     if a.cmd == "verify":

@@ -133,8 +133,19 @@ def test_battery_drain_in_flight_triggers_rtl():
 
 
 def test_link_failure_and_timeout_fail_safe():
+    # a failure BEFORE arming (here: the mission upload) is a refusal, not an emergency: nothing flew, nothing needs recovering
     r = asyncio.run(ex(fail="boom")[0].fly([mission()]))[0]
-    assert r.status == "aborted" and FakeLink.instances[0].rtl_called
+    assert r.status == "refused" and "preparation failed" in r.reason and not FakeLink.instances[0].started
+    FakeLink.instances.clear()
+
+    class DiesInFlight(FakeLink):
+        async def progress(self):
+            raise RuntimeError("telemetry exploded mid-flight")
+            yield  # pragma: no cover
+
+    # a failure AFTER launch is an emergency: command return-to-launch
+    r = asyncio.run(FlightExecutor(pol(), link_factory=lambda a: DiesInFlight(a), payload=NullPayload()).fly([mission()]))[0]
+    assert r.status == "aborted" and "RuntimeError" in r.reason and FakeLink.instances[0].started and FakeLink.instances[0].rtl_called
     FakeLink.instances.clear()
     e, _ = ex(pol(max_flight_s=0.05), hang=True)
     r = asyncio.run(e.fly([mission()]))[0]
@@ -299,15 +310,19 @@ def test_launch_stagger_keeps_a_drone_on_the_ground_until_its_slot():
     starts = {}
 
     class Timed(FakeLink):
-        async def connect(self):
+        async def start(self):  # the moment each drone ARMS: connections now all happen first, in phase 1
             starts[self.addr] = time.monotonic()
+            await super().start()
 
-    p = pol(launch_stagger_scale=0.05)
+    from agridrone import traffic
+
+    p = pol(launch_stagger_scale=0.03)
     a, b = mission(drone=0, alt=30), mission(drone=1, alt=50, targets=(((7, 5), "irrigate"),))
-    a.t0, b.t0 = 0, 8  # 8 s of airspace deconfliction x 0.05 = 0.4 s here
+    assert traffic.schedule([a, b], p, allow_hold=False)["mode"] == "concurrent"  # real plans get their delays from the scheduler
+    gap = abs(a.t0 - b.t0) * 0.03  # seconds of real waiting this test should see (the scale shrinks the 15 s of airspace deconfliction)
     asyncio.run(FlightExecutor(p, link_factory=lambda addr: Timed(addr), payload=NullPayload()).fly([a, b]))
     first, second = sorted(starts.values())
-    assert second - first >= 0.3
+    assert gap > 0.3 and second - first >= 0.8 * gap
 
 
 def test_ground_station_roundtrips_the_schedule_and_pad():
@@ -326,3 +341,51 @@ def test_the_autopilot_wind_failsafe_is_armed_at_the_headway_limit():
     e, _ = ex()
     asyncio.run(e.fly([mission()]))
     assert FakeLink.instances[0].wind_limit == 0.75 * e.fleet["speed_ms"]  # 7.5 m/s for a 10 m/s airspeed
+
+
+def test_no_drone_arms_until_every_drone_is_connected_even_if_a_connection_freezes_the_loop():
+    """Found by the review: connecting a late-launching drone used to freeze the event loop while earlier drones were already airborne
+    (their battery/GPS/link watchers dead). Phase 1 (connect + checks for all) must finish before phase 2 (arming) starts."""
+    import time
+
+    from agridrone import traffic
+
+    events = []
+
+    class Freezing(FakeLink):
+        async def connect(self):
+            events.append(("connect_start", self.addr))
+            if self.addr.endswith("14540"):
+                time.sleep(0.4)  # like mavsdk_server startup: blocks the WHOLE loop
+            events.append(("connect_done", self.addr))
+
+        async def start(self):
+            events.append(("armed", self.addr))
+            await super().start()
+
+    p = pol(launch_stagger_scale=0.02)
+    ms = [
+        mission(drone=0, alt=30),
+        mission(drone=1, alt=50, targets=(((7, 5), "irrigate"),)),
+        mission(drone=2, alt=70, targets=(((9, 6), "irrigate"),)),
+    ]
+    assert traffic.schedule(ms, p, allow_hold=False)["mode"] == "concurrent"
+    res = asyncio.run(FlightExecutor(p, link_factory=lambda a: Freezing(a), payload=NullPayload()).fly(ms))
+    assert all(r.status == "completed" for r in res)
+    last_connect = max(i for i, e in enumerate(events) if e[0] == "connect_done")
+    first_arm = min(i for i, e in enumerate(events) if e[0] == "armed")
+    assert last_connect < first_arm
+
+
+def test_a_drone_refused_in_phase_one_does_not_stop_the_others():
+    class Picky(FakeLink):
+        async def ready(self):
+            return not self.addr.endswith("14541")
+
+    from agridrone import traffic
+
+    ms = [mission(drone=0, alt=30), mission(drone=1, alt=50, targets=(((7, 5), "irrigate"),))]
+    traffic.schedule(ms, pol(), allow_hold=False)
+    res = asyncio.run(FlightExecutor(pol(), link_factory=lambda a: Picky(a), payload=NullPayload()).fly(ms))
+    by = {r.drone: r for r in res}
+    assert by[1].status == "refused" and by[0].status == "completed"

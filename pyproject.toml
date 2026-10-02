@@ -31,7 +31,8 @@ ignore = ["S101", "S311", "S603", "S607", "E701", "E702", "E741", "SIM108", "RET
 
 [tool.ruff.lint.per-file-ignores]
 "agridrone/dashboard.py" = ["E501"]   # embedded HTML/CSS/JS template
-"tests/*" = ["S", "B", "SIM", "RET", "E731", "C4"]
+"agridrone/briefing.py" = ["E501"]   # plain-language sentences read better unwrapped
+"tests/*" = ["E501", "S", "B", "SIM", "RET", "E731", "C4"]
 "scripts/*" = ["E501", "S", "E402", "E731", "SIM", "RET", "B", "C4"]
 
 [tool.coverage.run]

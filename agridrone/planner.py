@@ -6,6 +6,8 @@
   detour waypoints keep legs out of no-fly zones, and load is balanced so no drone is left idle.
 Sortie 0 flies first and gets the most urgent work. Missions flying at the same time use distinct altitude layers."""
 
+import math
+
 from . import model as M
 from . import traffic
 from . import wind as W
@@ -68,7 +70,7 @@ class _Legs:
                     if f is None:
                         e = None  # cannot make headway on this leg in this wind
                         break
-                    e += (abs(p[0] - q[0]) + abs(p[1] - q[1])) * self.f["wh_per_cell_move"] * f
+                    e += math.hypot(q[0] - p[0], q[1] - p[1]) * self.f["wh_per_cell_move"] * f  # true straight-line distance
                 self.c[k] = None if e is None else (e, hop[:-1])
         return self.c[k]
 

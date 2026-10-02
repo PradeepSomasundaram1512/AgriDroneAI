@@ -31,7 +31,7 @@ def passive(seed, days, size, calendar):
                 [f.apply(c, "irrigate") for c in f.cells]
             if f.day % 14 == 0:
                 [f.apply(c, "spray") for c in f.cells]
-    return f.mean_yield(), f.water_used, f.chem_used, 0.0
+    return f.mean_yield(), f.water_used, f.chem_used, 0.0, 0.0
 
 
 def agent(seed, days, size, sorties, model=True, fault_rate=0.0, quality=True):
@@ -42,12 +42,14 @@ def agent(seed, days, size, sorties, model=True, fault_rate=0.0, quality=True):
     pol["field"]["sensor_fault_rate"], pol["quality_filter"] = fault_rate, quality
     d = tempfile.mkdtemp()
     t = time.time()
-    ok = True
+    ok, hours = True, 0.0
     for _ in range(days):
-        ok &= bool(run_cycle(pol, d)["ok"])
+        r = run_cycle(pol, d)
+        ok &= bool(r["ok"])
+        hours += r.get("flight_hours", 0.0)
     f = store.load_farm(seed, size, d, fault_rate)
     assert ok, "agent cycle failed"
-    return f.mean_yield(), f.water_used, f.chem_used, (time.time() - t) / days
+    return f.mean_yield(), f.water_used, f.chem_used, (time.time() - t) / days, hours
 
 
 def main(days=120, seeds=(1, 2, 3, 4, 5, 6), size=24):
@@ -97,6 +99,7 @@ def main(days=120, seeds=(1, 2, 3, 4, 5, 6), size=24):
                 "yield_sd": round(st.pstdev([r[0] for r in v]), 4),
                 "water_mm": round(st.mean(r[1] for r in v) / n),
                 "sprays": round(st.mean(r[2] for r in v) / n, 2),
+                "flight_hours": round(st.mean(r[4] for r in v), 1),
             }
             for k, v in res.items()
         ],

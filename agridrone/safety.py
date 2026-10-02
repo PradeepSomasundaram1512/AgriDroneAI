@@ -3,6 +3,7 @@
 Checks: kill switch, battery reserve, no-fly cells AND the straight flight legs between waypoints (a drone must not
 cross a no-fly zone on its way to a legal target), vertical separation between drones that fly at the same time."""
 
+import math
 from dataclasses import dataclass, field
 
 from . import traffic, wind as W
@@ -34,7 +35,9 @@ def mission_energy(start, targets, fleet, wind=None, altitude=30.0, shear=0.2):
         f = W.leg_factor(dx, dy, air, wvec)
         if f is None:
             return float("inf")
-        e += (abs(dx) + abs(dy)) * fleet["wh_per_cell_move"] * f + (0.0 if action == "via" else fleet["wh_per_cell_action"])
+        e += math.hypot(dx, dy) * fleet["wh_per_cell_move"] * f + (
+            0.0 if action == "via" else fleet["wh_per_cell_action"]
+        )  # straight-line flight
         cur = cell
     return e
 
@@ -84,7 +87,7 @@ def connect(a, b, nofly, size):
             v = (min(max(vx, 0), size - 1), min(max(vy, 0), size - 1))
             if v in nofly or not leg_clear(a, v, nofly) or not leg_clear(v, b, nofly):
                 continue
-            d = abs(a[0] - v[0]) + abs(a[1] - v[1]) + abs(v[0] - b[0]) + abs(v[1] - b[1])
+            d = math.hypot(a[0] - v[0], a[1] - v[1]) + math.hypot(v[0] - b[0], v[1] - b[1])
             if best is None or d < best[0]:
                 best = (d, v)
     return [best[1], tuple(b)] if best else None

@@ -148,8 +148,9 @@ def test_open_meteo_wind_columns_are_parsed_and_old_cache_entries_still_load(mon
 # ------------------------------------------------------------------ planner + gate
 def test_gate_recomputes_energy_and_catches_an_underestimating_plan():
     p = pol()
-    m = Mission(0, 30, [((12, 3), "irrigate"), ((3, 12), "irrigate"), ((12, 12), "irrigate")], energy_wh=1.0, wind=(5.0, 5.0, 270.0))
-    assert safety.validate([m], p) == [] or all("energy" not in v for v in safety.validate([m], p)) or True
+    m = Mission(0, 30, [((4, 3), "irrigate"), ((3, 5), "irrigate")], energy_wh=1.0, wind=(3.0, 3.0, 270.0))
+    assert not [v for v in safety.validate([m], p) if "energy" in v or "headway" in v]  # a genuinely modest route in a light wind passes
+    assert 3 < mission_energy((0, 0), m.targets, p["fleet"], W.Wind(3.0, 3.0, 270.0).design(), 30) < 60
     big = Mission(0, 70, [((22, 0), "irrigate"), ((22, 22), "irrigate"), ((0, 22), "irrigate")], energy_wh=1.0, wind=(7.5, 8.0, 270.0))
     assert any("energy" in v or "headway" in v for v in safety.validate([big], p))  # the stored 1 Wh is not trusted
 
@@ -257,13 +258,14 @@ def test_agent_defers_spraying_but_keeps_irrigating_in_a_moderate_wind(tmp_path,
     p = load_policy()
     p["field"]["size"] = 16
     stormy(monkeypatch, wind_ms=8.0, gust_ms=10.0, wind_from_deg=270.0)  # x0.75 flight window = 6 m/s: above spray, below flight limit
-    seen = set()
+    flown = 0
     for _ in range(70):
         rec = run_cycle(p, tmp_path)
-        assert rec["ok"] and not rec["grounded_by_wind"]
-        seen.add(rec["spray_deferred"] > 0)
-        assert rec["wind_ms"] == 6.0
-    assert True in seen or rec["executed"] >= 0
+        assert rec["ok"] and not rec["grounded_by_wind"] and rec["wind_ms"] == 6.0
+        flown += rec["executed"]
+    farm = store.load_farm(p["field"]["seed"], 16, tmp_path)
+    assert flown > 0  # it keeps flying (watering) in a wind that stops spraying
+    assert farm.chem_used == 0 and farm.water_used > 0  # ...and not one patch was sprayed in a wind above the drift limit
     assert all(a["kind"] != "safety_block" for a in store.read_jsonl("audit.jsonl", tmp_path))
 
 
@@ -275,7 +277,7 @@ def test_a_normal_synthetic_season_runs_with_wind_and_never_hits_a_safety_block(
         rec = run_cycle(p, tmp_path)
         assert rec["ok"], rec
         grounded += rec["grounded_by_wind"]
-    assert 0 <= grounded < 40
+    assert grounded < 40  # not grounded half the time
     assert not [a for a in store.read_jsonl("audit.jsonl", tmp_path) if a["kind"] == "safety_block"]
 
 

@@ -22,7 +22,9 @@ def crossing():
 def test_a_cruising_drone_over_a_climbing_drones_pad_is_a_detected_conflict():
     ms = crossing()
     rep = traffic.check(ms, pol())
-    assert rep["steps"] > 0 and rep["conflicts"][0]["horizontal_m"] < 23 and rep["conflicts"][0]["vertical_m"] <= 15
+    assert (
+        rep["steps"] > 0 and rep["conflicts"][0]["horizontal_m"] < 23 + 10 and rep["conflicts"][0]["vertical_m"] <= 15 + 3
+    )  # 20 m clearance + 3 m GNSS + sampling margin
 
 
 def test_scheduler_removes_the_conflict_and_the_gate_agrees():
@@ -120,3 +122,40 @@ def test_checker_is_fast_enough_to_run_on_every_plan():
     t = time.time()
     traffic.check(ms, p)
     assert time.time() - t < 3.0
+
+
+def _grazing_pair(t0):
+    a, b = Mission(0, 30, [((4, 0), "irrigate")]), Mission(1, 50, [((0, 6), "irrigate")])
+    b.t0 = t0
+    return [a, b]
+
+
+def _steps(step, t0, p, inflate):
+    old = traffic.STEP_S
+    traffic.STEP_S = step
+    try:
+        return traffic.check(_grazing_pair(t0), p, inflate=inflate)["steps"]
+    finally:
+        traffic.STEP_S = old
+
+
+def test_a_grazing_conflict_between_two_samples_is_not_missed():
+    """Found by the merciless review: the plain 1 s replay saw NOTHING at start delays where the true plan has a real (0.1-0.3 s) conflict."""
+    p = pol(speed_ms=10.0)
+    delays = [k * 0.1 for k in range(0, 300)]
+    truth = {t: _steps(0.02, t, p, inflate=False) > 0 for t in delays}  # near-continuous replay = ground truth
+    old = {t: _steps(1.0, t, p, inflate=False) > 0 for t in delays}  # the previous check
+    new = {t: _steps(1.0, t, p, inflate=True) > 0 for t in delays}  # the rigorous check
+    missed_before = [t for t in delays if truth[t] and not old[t]]
+    assert missed_before, "the scenario must actually exhibit the old flaw"
+    assert all(new[t] for t in delays if truth[t])  # the new check never misses a real conflict
+    assert sum(new.values()) <= sum(truth.values()) + 60  # ...without flagging everything (it is only conservative)
+
+
+def test_sampling_margin_is_the_distance_two_drones_can_close_between_samples():
+    p = pol(speed_ms=10.0)
+    c = traffic.cfg(p)
+    mh, mv = traffic.sampling_margins(c)
+    assert mh == 10.0 * traffic.STEP_S and mv == 3.0 * traffic.STEP_S
+    gusty = traffic.cfg(p, __import__("agridrone.wind", fromlist=["Wind"]).Wind(5, 10, 0))
+    assert traffic.sampling_margins(gusty)[0] > mh  # wind makes the bound larger

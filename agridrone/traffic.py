@@ -24,7 +24,7 @@ DEFAULTS = {
     "pad_spacing_m": 40.0,
 }
 MIN_GS = 0.25  # fraction of airspeed assumed if a leg is (wrongly) infeasible; the gate rejects such legs anyway
-STEP_S = 1.0  # replay time step; a drone moves <= 5 m per step, far below the 20 m clearance
+STEP_S = 1.0  # replay time step; conflicts use clearances inflated by what two drones can close between samples (see sampling_margins)
 MOVE_S = 6  # how much each scheduling move delays a drone
 MAX_ITER = 80
 TURNAROUND_PAD_S = 3.0
@@ -41,6 +41,16 @@ def cfg(policy, wind=None):
     c["wind"] = wind
     c["horizontal_clearance_m"] += W.clearance_margin(wind or W.CALM, policy)
     return c
+
+
+def sampling_margins(c):
+    """How much further apart than the clearance two drones must be at a SAMPLE for the pair to be safe BETWEEN samples.
+    The replay samples every STEP_S seconds; between samples each drone moves at most (speed * STEP_S / 2) horizontally (plus wind) and
+    (climb or descent rate * STEP_S / 2) vertically, so the pair closes by at most twice that. Inflating the conflict test by exactly
+    this bound guarantees a conflict cannot start and end between two samples (a grazing pass was missed by the plain 1 s check)."""
+    gust = c["wind"].gust if c.get("wind") is not None else 0.0
+    vmax_h = c["speed_ms"] + 1.5 * gust
+    return vmax_h * STEP_S, max(c["climb_rate_ms"], c["descent_rate_ms"]) * STEP_S
 
 
 def pad_xy(pad, c):
@@ -106,7 +116,7 @@ def _event(t, a, b, h, v):
     return {"t": round(t), "drones": [a.drone, b.drone], "horizontal_m": round(h, 1), "vertical_m": round(v, 1)}
 
 
-def check(missions, policy, max_report=5):
+def check(missions, policy, max_report=5, inflate=True):
     """Replay all missions of ONE sortie (they fly concurrently). -> {conflicts, steps, min_ratio, closest}.
     A conflict = horizontal distance < clearance AND vertical distance < clearance at the same instant.
     min_ratio = smallest max(h/H, v/V) over time (>= 1.0 means every moment was at least as safe as required)."""
@@ -115,6 +125,8 @@ def check(missions, policy, max_report=5):
     built = [_segments(m, c) for m in ms]
     end = max((b[1] for b in built), default=0.0)
     H, V = c["horizontal_clearance_m"], c["vertical_clearance_m"]
+    mh, mv = sampling_margins(c) if inflate else (0.0, 0.0)
+    Hs, Vs = H + mh, V + mv  # conflict thresholds at a sample (see sampling_margins)
     conflicts, steps, best = [], 0, (float("inf"), None)
     t = 0.0
     while t <= end + STEP_S:
@@ -126,7 +138,7 @@ def check(missions, policy, max_report=5):
             ratio = max(h / H, v / V)
             if ratio < best[0]:
                 best = (ratio, _event(t, ms[i], ms[j], h, v))
-            if h < H and v < V:
+            if h < Hs and v < Vs:
                 steps += 1
                 if len(conflicts) < max_report:
                     conflicts.append(_event(t, ms[i], ms[j], h, v))

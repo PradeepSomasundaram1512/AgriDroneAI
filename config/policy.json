@@ -114,5 +114,17 @@
     "grace_s": 10,
     "poll_s": 1,
     "_note": "loss_per_flight_hour drives GNSS outages in the SIMULATOR (0.02 is deliberately pessimistic). On hardware, outages are detected from telemetry: hold, then land in place after grace_s; drones on lower layers return home."
+  },
+  "economics": {
+    "patch_ha": 0.25,
+    "crop_value_per_ha": 2200.0,
+    "water_per_mm_ha": 0.3,
+    "spray_per_patch": 4.5,
+    "drone_cost": 3500.0,
+    "drone_life_years": 4.0,
+    "drone_hour_ops": 2.0,
+    "recovery_cost": 150.0,
+    "operator_per_season": 400.0,
+    "_note": "PLACEHOLDER prices (mid-western corn ballpark): replace with your own. Agronomic inputs come from the simulation, so this is a decision aid, not a forecast."
   }
 }

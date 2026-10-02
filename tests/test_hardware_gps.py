@@ -3,6 +3,7 @@ import asyncio
 import pytest
 from test_hardware import FakeLink, mission, pol
 
+from agridrone import traffic
 from agridrone import wind as W
 from agridrone.hardware import FlightExecutor, NullPayload, PreflightError
 
@@ -96,8 +97,7 @@ def test_permanent_gps_loss_lands_in_place_and_reports_it():
 def test_a_failing_high_drone_orders_the_drone_below_it_home_but_not_the_one_above():
     p = policy()
     low, mid, high = mission(drone=0, alt=30), mission(drone=1, alt=50), mission(drone=2, alt=70)
-    for m in (low, mid, high):
-        m.t0 = 0
+    assert traffic.schedule([low, mid, high], p, allow_hold=False)["mode"] == "concurrent"  # a real plan: delays from the scheduler
 
     class PerDrone(GpsLink):
         pace = 1.0

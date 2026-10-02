@@ -236,6 +236,7 @@ def run_cycle(policy=None, state_dir=None, now=None):
         level = policy["autonomy_level"]
         executed = 0
         gps_info = {"events": [], "patches_deferred": 0, "grounded": []}
+        flown = missions
         fates = {}
         before = snapshot(farm)  # for the dashboard replay: the field as the drones found it
         if violations:
@@ -296,6 +297,9 @@ def run_cycle(policy=None, state_dir=None, now=None):
             "wind_from_deg": round(wind.from_deg),
             "grounded_by_wind": not flight_ok,
             "spray_deferred": len(spray_deferred),
+            "flight_hours": round(
+                sum(traffic.duration(m, policy) for m in (flown if level == "simulation" and not violations else missions)) / 3600, 3
+            ),
             "fleet_energy_wh": energy["used_wh"],
             "charged_between_flights_wh": energy["charged_wh"],
             "overnight_charge_wh": round(overnight_wh),

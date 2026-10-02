@@ -213,11 +213,13 @@ class FlightExecutor:
                 raise PreflightError(f"no link configured for drone {m.drone}")
 
     # --- per-drone flight ---
-    async def fly_one(self, mission, dry_run=False):
+    async def _prepare(self, mission):
+        """PHASE 1, with every drone still on the ground: connect, GPS/home lock, GPS quality, battery, failsafes, mission upload.
+        Returns (link, waypoints, total) or a FlightResult if the drone is refused. Starting a MAVSDK server can block the whole event
+        loop for tens of seconds; doing it for ALL drones before ANY of them arms means no airborne drone ever has its battery/GPS/link
+        watchers frozen by someone else's connection (found by the review: a late-launching drone's connect froze an airborne one)."""
         wps = self.waypoints(mission)
         total = len(wps)
-        if dry_run:
-            return FlightResult(mission.drone, "dry_run", 0, total, items=wps)
         link = self.link_factory(self.hw["links"][mission.drone])
         reserve = self.fleet["min_reserve_pct"]
         try:
@@ -239,7 +241,16 @@ class FlightExecutor:
             if hasattr(link, "ensure_failsafe") and not await link.ensure_failsafe(0.75 * self.fleet.get("speed_ms", 10.0)):
                 return FlightResult(mission.drone, "refused", 0, total, "could not set/verify autopilot link-loss failsafe (RTL)")
             await link.upload(wps, self.hw.get("speed_m_s", 5.0), self.hw.get("dwell_s", 4))
-            log.info("drone %s: mission uploaded (%d waypoints), arming + starting", mission.drone, total)
+            log.info("drone %s: mission uploaded (%d waypoints), ready", mission.drone, total)
+            return link, wps, total
+        except Exception as e:  # nothing has armed yet: a failed preparation is a refusal, not an emergency
+            return FlightResult(mission.drone, "refused", 0, total, f"preparation failed: {type(e).__name__}: {str(e)[:80]}")
+
+    async def _fly_prepared(self, mission, prep):
+        """PHASE 2: arm, take off, watch, land. Only ever called after every drone finished phase 1."""
+        link, _wps, total = prep
+        reserve = self.fleet["min_reserve_pct"]
+        try:
             await link.start()
             log.info("drone %s: started, waiting for takeoff", mission.drone)
             # Progress/in_air streams can replay STALE state from a previous mission, so completion is only
@@ -267,6 +278,14 @@ class FlightExecutor:
                 f"{type(e).__name__}: {str(e)[:80]}; "
                 + ("RTL commanded" if sent else "RTL could NOT be sent; relying on autopilot failsafe"),
             )
+
+    async def fly_one(self, mission, dry_run=False):
+        """One drone, both phases (convenience for a single vehicle)."""
+        if dry_run:
+            wps = self.waypoints(mission)
+            return FlightResult(mission.drone, "dry_run", 0, len(wps), items=wps)
+        prep = await self._prepare(mission)
+        return prep if isinstance(prep, FlightResult) else await self._fly_prepared(mission, prep)
 
     async def _watched(self, link, mission, total, reserve):
         """Run the monitor while watching battery, GPS and the vehicle link; whichever guard fires first decides the outcome."""
@@ -422,15 +441,20 @@ class FlightExecutor:
             return False
 
     async def fly(self, missions, dry_run=False):
-        if not dry_run:
-            self.preflight_policy(missions)
+        if dry_run:
+            return list(await asyncio.gather(*[self.fly_one(m, dry_run=True) for m in missions]))
+        self.preflight_policy(missions)
         self._emergency = {}
-        return await asyncio.gather(*[self._staggered(m, dry_run) for m in missions])
+        # PHASE 1: everyone connects and is checked while still on the ground (any blocking happens here, harmlessly)
+        preps = await asyncio.gather(*[self._prepare(m) for m in missions])
+        # PHASE 2: launch on the scheduler's staggered timetable
+        return list(await asyncio.gather(*[self._staggered(m, p) for m, p in zip(missions, preps)]))
 
-    async def _staggered(self, m, dry_run):
-        """Launch times come from the traffic scheduler: a drone that must wait for another to clear the airspace waits here,
-        on the ground, before it even connects."""
-        if not dry_run and m.t0 > 0:
+    async def _staggered(self, m, prep):
+        """Launch times come from the traffic scheduler: a drone that must wait for another to clear the airspace waits here, on its pad."""
+        if isinstance(prep, FlightResult):
+            return prep
+        if m.t0 > 0:
             log.info("drone %s: holding on the pad for %ss (airspace deconfliction)", m.drone, m.t0)
             await asyncio.sleep(m.t0 * self.hw.get("launch_stagger_scale", 1.0))
-        return await self.fly_one(m, dry_run)
+        return await self._fly_prepared(m, prep)

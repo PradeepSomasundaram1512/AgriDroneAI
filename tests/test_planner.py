@@ -32,7 +32,6 @@ def test_no_target_planned_twice_and_none_in_nofly():
     ms = planner.plan(tg, pol)
     cells = [c for m in ms for c, _ in real(m)]
     assert len(cells) == len(set(cells))
-    assert not nofly & set(cells) or True  # targets inside no-fly may be requested; they must never be routed to
     assert all(tuple(c) not in nofly for m in ms for c, _ in m.targets)
 
 
