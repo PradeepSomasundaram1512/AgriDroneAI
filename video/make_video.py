@@ -397,7 +397,7 @@ def scene_problem(im, d, u, t, c):
     text(d, (300, 145), "Fixed schedule: every patch, every week", 24, FG, "mm")
     text(d, (980, 145), "Smart crew: only patches that need it", 24, GREEN, "mm")
     a = ease(u * 1.6)
-    wa, wb = BENCH["strategies"][1]["water_mm"], BENCH["strategies"][4]["water_mm"]
+    wa, wb = BENCH["strategies"][1]["water_mm"], next(x for x in BENCH["strategies"] if x["id"] == "agent-3")["water_mm"]
     text(d, (300, 595), f"{int(wa * a)} mm of water", 40, ORANGE, "mm")
     text(d, (980, 595), f"{int(wb * a)} mm of water", 40, GREEN, "mm")
     text(d, (640, 595), "vs", 28, MUT, "mm")
@@ -759,6 +759,7 @@ def scene_satellite(im, d, u, t, c):
 
     scenes = [Scene(**q) for q in sc]
     an = imagery.analyze(scenes)
+                ("Smart farmer", st["triggered"]["yield"] * 100, YEL, "%"),
     if u > 0.78:
         for i, t0 in enumerate(an.get("scouting", [])[:5]):
             a = ease((u - 0.78) * 8 - i * 0.4)
@@ -769,6 +770,7 @@ def scene_satellite(im, d, u, t, c):
     panel(d, 680, 150, 1220, 480)
     ser = an["series"]
     text(d, (710, 175), "Average crop vigor over time", 24, FG)
+                ("Smart farmer", st["triggered"]["water_mm"], YEL, ""),
     if len(ser) > 1:
         vs = [q["ndvi"] for q in ser]
         lo, hi = min(vs) - 0.02, max(vs) + 0.02
@@ -853,17 +855,17 @@ def scene_results(im, d, u, t, c):
     )
     for gi, (gt, bars, mx, _) in enumerate(groups):
         x0 = 90 + gi * 600
-        text(d, (x0 + 230, 150), gt, 32, FG, "mm")
+        text(d, (x0 + 280, 150), gt, 32, FG, "mm")
         for bi, (lab, val, col, unit) in enumerate(bars):
             a = ease(u * 1.8 - bi * 0.25 - gi * 0.2)
-            bx = x0 + bi * 160
+            bx = x0 + bi * 140
             h = 320 * (val / mx) * a
             d.rounded_rectangle([bx, 530 - h, bx + 120, 530], 10, fill=col)
             text(d, (bx + 60, 530 - h - 20), f"{val * a:.0f}{unit}" if unit == "" else f"{val * a:.1f}%", 26, FG, "mm")
             text(d, (bx + 60, 558), lab, 18, MUT, "mm", bold=False)
     lw = int(100 * (1 - st["agent-3"]["water_mm"] / st["calendar"]["water_mm"]))
     if u > 0.65:
-        text(d, (W / 2, 598), f"The AI crew keeps the crop with {lw}% less water than the fixed schedule", 28, GREEN, "mm")
+        text(d, (W / 2, 598), f"{lw}% less water than the fixed schedule. A smart farmer with the same sensors does about as well.", 25, GREEN, "mm")
 
 
 def scene_auto(im, d, u, t, c):
