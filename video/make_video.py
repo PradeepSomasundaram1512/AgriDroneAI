@@ -22,16 +22,10 @@ ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 os.environ["AGRIDRONE_OFFLINE"] = "1"
-LANG = "ta" if "--lang" in sys.argv and sys.argv[sys.argv.index("--lang") + 1] == "ta" else "en"
-if LANG == "ta":
-    import script_ta  # noqa: E402
-    from script_ta import SCENES  # noqa: E402
-else:
-    from script import SCENES  # noqa: E402
+from script import SCENES  # noqa: E402
 
 W, H, FPS = 1280, 720, 20
-BUILD_ROOT = ROOT / "video" / "build"
-BUILD = BUILD_ROOT / ("ta" if LANG == "ta" else "")
+BUILD = ROOT / "video" / "build"
 BG, FG, MUT = (15, 24, 18), (236, 244, 238), (160, 180, 166)
 GREEN, BLUE, ORANGE, RED, YEL, BROWN = (95, 208, 133), (122, 162, 255), (251, 146, 60), (239, 68, 68), (214, 196, 74), (155, 106, 58)
 DRONE_COL = [(255, 255, 255), (125, 211, 252), (253, 230, 138)]
@@ -60,77 +54,7 @@ def mix(c1, c2, t):
     return tuple(int(lerp(a, b, t)) for a, b in zip(c1, c2))
 
 
-_ct_cache = {}
-
-
-def has_tamil(s):
-    return any("\u0b80" <= ch <= "\u0bff" for ch in s)
-
-
-def tr(s):
-    """English UI string -> Tamil (when rendering the Tamil video); unknown strings stay as they are."""
-    if LANG != "ta":
-        return s
-    if s in script_ta.TA:
-        return script_ta.TA[s]
-    for rx, fn in script_ta.PATTERNS:
-        m = rx.fullmatch(s)
-        if m:
-            return fn(m)
-    return s.replace("m/s", "மீ/வி")
-
-
-def _ct_line(s, size, bold):
-    import CoreText
-    from Foundation import NSAttributedString
-
-    f = CoreText.CTFontCreateWithName("TamilSangamMN-Bold" if bold else "TamilSangamMN", size, None)
-    return NSAttributedString.alloc().initWithString_attributes_(
-        s, {CoreText.kCTFontAttributeName: f, CoreText.kCTForegroundColorFromContextAttributeName: True}
-    )
-
-
-def ct_width(s, size, bold=True):
-    """Text width in px, measured by macOS's own text engine (correct Tamil shaping)."""
-    import CoreText
-
-    line = CoreText.CTLineCreateWithAttributedString(_ct_line(s, size, bold))
-    return CoreText.CTLineGetTypographicBounds(line, None, None, None)[0]
-
-
-def ct_image(s, size, bold, color):
-    """Render one line of text to an RGBA image with CoreText (Pillow here has no complex-script shaping)."""
-    key = (s, size, bold, color)
-    if key in _ct_cache:
-        return _ct_cache[key]
-    import CoreText
-    import Quartz
-
-    w, h = int(ct_width(s, size, bold)) + 8, int(size * 1.3) + 2
-    cs = Quartz.CGColorSpaceCreateDeviceRGB()
-    ctx = Quartz.CGBitmapContextCreate(None, w, h, 8, w * 4, cs, Quartz.kCGImageAlphaPremultipliedLast)
-    Quartz.CGContextSetRGBFillColor(ctx, color[0] / 255, color[1] / 255, color[2] / 255, 1.0)
-    line = CoreText.CTLineCreateWithAttributedString(_ct_line(s, size, bold))
-    Quartz.CGContextSetTextPosition(ctx, 4, size * 0.30)
-    CoreText.CTLineDraw(line, ctx)
-    data = Quartz.CGBitmapContextGetData(ctx)
-    img = Image.frombuffer("RGBa", (w, h), bytes(data.as_buffer(w * h * 4)), "raw", "RGBa", w * 4, 1).convert("RGBA")
-    if len(_ct_cache) > 600:
-        _ct_cache.clear()
-    _ct_cache[key] = img
-    return img
-
-
 def text(d, xy, s, size=28, color=FG, anchor="la", bold=True):
-    if LANG == "ta":
-        s = tr(s)
-        if has_tamil(s):
-            img = ct_image(s, int(size * 0.9), bold, tuple(color[:3]))
-            w, h = img.size
-            ax = {"l": 0.0, "m": 0.5, "r": 1.0}[anchor[0]]
-            ay = {"a": 0.0, "t": 0.0, "m": 0.5, "b": 1.0, "s": 0.85}[anchor[1]]
-            d._image.paste(img, (int(xy[0] - ax * w), int(xy[1] - ay * h)), img)
-            return
     d.text(xy, s, font=font(size, bold), fill=color, anchor=anchor)
 
 
@@ -149,13 +73,13 @@ def wrap(s, size, maxw, bold=False):
 # ------------------------------------------------------------------------------------------ real data
 def build_story():
     """Run the real autopilot to a day with 3 flight waves, wind and a GPS loss (deterministic, cached)."""
-    cache = BUILD_ROOT / "story.json"
+    cache = BUILD / "story.json"
     if cache.exists():
         return json.loads(cache.read_text())
     from agridrone.agent import run_cycle
     from agridrone.config import load_policy
 
-    BUILD_ROOT.mkdir(parents=True, exist_ok=True)
+    BUILD.mkdir(parents=True, exist_ok=True)
     p = load_policy()
     p["field"]["seed"], p["imagery"]["enabled"], p["gps"]["loss_per_flight_hour"] = 1, False, 0.25
     d = tempfile.mkdtemp()
@@ -666,7 +590,7 @@ def scene_wind(im, d, u, t, c):
             x = tx - 40 + k * 6 + drift
             droplet(d, x, 420 + ph * 80, (245, 158, 11, 220), 4)
         if v > 0.45:
-            text(d, (640, 598), "wind blows the spray off target", 22, ORANGE, "mm")
+            text(d, (930, 470), "wind blows the spray off target", 22, ORANGE, "mm")
 
 
 def scene_gps(im, d, u, t, c):
@@ -759,7 +683,6 @@ def scene_satellite(im, d, u, t, c):
 
     scenes = [Scene(**q) for q in sc]
     an = imagery.analyze(scenes)
-                ("Smart farmer", st["triggered"]["yield"] * 100, YEL, "%"),
     if u > 0.78:
         for i, t0 in enumerate(an.get("scouting", [])[:5]):
             a = ease((u - 0.78) * 8 - i * 0.4)
@@ -770,7 +693,6 @@ def scene_satellite(im, d, u, t, c):
     panel(d, 680, 150, 1220, 480)
     ser = an["series"]
     text(d, (710, 175), "Average crop vigor over time", 24, FG)
-                ("Smart farmer", st["triggered"]["water_mm"], YEL, ""),
     if len(ser) > 1:
         vs = [q["ndvi"] for q in ser]
         lo, hi = min(vs) - 0.02, max(vs) + 0.02
@@ -837,6 +759,7 @@ def scene_results(im, d, u, t, c):
             [
                 ("Do nothing", st["none"]["yield"] * 100, ORANGE, "%"),
                 ("Fixed schedule", st["calendar"]["yield"] * 100, BLUE, "%"),
+                ("Smart farmer", st["triggered"]["yield"] * 100, YEL, "%"),
                 ("AI drone crew", st["agent-3"]["yield"] * 100, GREEN, "%"),
             ],
             100.0,
@@ -847,6 +770,7 @@ def scene_results(im, d, u, t, c):
             [
                 ("Do nothing", st["none"]["water_mm"], ORANGE, ""),
                 ("Fixed schedule", st["calendar"]["water_mm"], BLUE, ""),
+                ("Smart farmer", st["triggered"]["water_mm"], YEL, ""),
                 ("AI drone crew", st["agent-3"]["water_mm"], GREEN, ""),
             ],
             650.0,
@@ -909,7 +833,7 @@ def scene_close(im, d, u, t, c):
             d.ellipse([84, y + 6, 112, y + 34], fill=col)
             text(d, (130, y + 4), a, 32, col)
             text(d, (130, y + 44), b, 22, MUT, bold=False)
-    text(d, (80, 50), "AgriDroneAI", 30, GREEN)
+    text(d, (80, 660), "AgriDroneAI", 34, GREEN)
 
 
 SCENE_FN = {
@@ -933,25 +857,14 @@ SCENE_FN = {
 # ------------------------------------------------------------------------------------------ narration + assembly
 def caption(d, narration, u):
     words = narration.split()
-    per = 7 if LANG == "ta" else 10
+    per = 10
     chunks = [" ".join(words[i : i + per]) for i in range(0, len(words), per)]
     k = min(len(chunks) - 1, int(u * len(chunks)))
-    if LANG == "ta":
-        lines, cur = [], ""
-        for w in chunks[k].split():
-            t = (cur + " " + w).strip()
-            if ct_width(t, 26, False) <= W - 220:
-                cur = t
-            else:
-                lines.append(cur)
-                cur = w
-        lines = lines + ([cur] if cur else [])
-    else:
-        lines = wrap(chunks[k], 28, W - 200)
+    lines = wrap(chunks[k], 28, W - 200)
     h = 22 + 38 * len(lines)
     d.rounded_rectangle([90, H - h - 14, W - 90, H - 14], 14, fill=(0, 0, 0, 190))
     for i, ln in enumerate(lines):
-        text(d, (W / 2, H - h - 14 + (11 if LANG == "ta" else 20) + i * 38), ln, 28, (255, 255, 255), "mt", bold=False)
+        text(d, (W / 2, H - h - 14 + 20 + i * 38), ln, 28, (255, 255, 255), "mt", bold=False)
 
 
 def synth_audio():
@@ -960,10 +873,7 @@ def synth_audio():
     for i, (name, txt) in enumerate(SCENES):
         aiff, wav = BUILD / f"s{i:02d}.aiff", BUILD / f"s{i:02d}.wav"
         if not wav.exists():
-            subprocess.run(
-                ["say", "-v", "Vani" if LANG == "ta" else "Samantha", "-r", "165" if LANG == "ta" else "158", "-o", str(aiff), txt],
-                check=True,
-            )
+            subprocess.run(["say", "-v", "Samantha", "-r", "158", "-o", str(aiff), txt], check=True)
             subprocess.run(["ffmpeg", "-y", "-loglevel", "error", "-i", str(aiff), "-ar", "44100", "-ac", "1", str(wav)], check=True)
         dur = float(
             subprocess.run(
@@ -978,7 +888,7 @@ def synth_audio():
 def render(preview=False):
     ctx = Ctx()
     durs, wavs = synth_audio()
-    out = ROOT / "video" / ("AgriDroneAI-explainer-tamil.mp4" if LANG == "ta" else "AgriDroneAI-explainer.mp4")
+    out = ROOT / "video" / "AgriDroneAI-explainer.mp4"
     if preview:
         pdir = BUILD / "preview"
         pdir.mkdir(parents=True, exist_ok=True)

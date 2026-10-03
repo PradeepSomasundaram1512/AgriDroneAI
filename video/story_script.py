@@ -25,3 +25,18 @@ DASH = [
     (4150, "And the honest money view. Compared with a fixed schedule, the drones save a lot. But a smart farmer with the same sensors earns almost the same. The real advantage... is that it all happens automatically."),
     (4700, "Six simulated farms. A hundred and twenty days each. About ninety-nine percent of the crop, with roughly eighty percent less water. Not a field trial... but a strong start. Thank you for watching."),
 ]
+
+# ~2 minute cut for social media
+SHORT = [
+    ("title", "Imagine a farm that looks after itself. A small crew of drones, and an A I that decides which patch needs water... and which is fine. Here's how it works."),
+    ("problem", "Most farms water everything on a fixed schedule. In our tests, that used about six hundred millimetres of water. The smart crew used about one hundred and ten... and the crop stayed healthy."),
+    ("crew", "Each morning, the A I ranks every patch by urgency. Then the drones fly out in waves, watering or spraying only what needs care."),
+    ("collide", "Safety comes first. Every flight plan is replayed, second by second, in three dimensions... and rejected if two drones could ever get too close. Zero close calls."),
+    ("gps", "If a drone loses its G P S signal, it stops spraying, waits a moment, and lands gently, right where it is."),
+    ("results", "In simulation, the A I kept about ninety-nine percent of the crop, with roughly eighty percent less water than a fixed schedule. To be fair, a smart farmer using the same sensors does nearly as well. The win... is that it all runs by itself."),
+    ("close", "This is a simulation. The next step is a real pilot, with real drones, on a real field."),
+]
+SHORT_DASH = [
+    (0, "And here is the live dashboard. A plain English briefing every morning, and the farm's health at a glance."),
+    (4150, "Even the money view is honest. Against a smart farmer, the drones earn about the same. The real advantage is automation. Thanks for watching."),
+]

@@ -16,10 +16,10 @@ import story_script  # noqa: E402
 import tts  # noqa: E402
 
 
-def story(voice):
-    story_dir = mv.BUILD / "story"
+def story(voice, short=False):
+    story_dir = mv.BUILD / ("story_short" if short else "story")
     story_dir.mkdir(parents=True, exist_ok=True)
-    mv.SCENES = story_script.SCENES
+    mv.SCENES = story_script.SHORT if short else story_script.SCENES
 
     def synth_audio():
         durs, wavs = [], []
@@ -46,9 +46,9 @@ def story(voice):
     return dest
 
 
-def main(voice):
-    a = story(voice)
-    dv.main(voice, story_script.DASH, "AgriDroneAI-dashboard-part.mp4", "d")
+def main(voice, short=False):
+    a = story(voice, short)
+    dv.main(voice, story_script.SHORT_DASH if short else story_script.DASH, "AgriDroneAI-dashboard-part.mp4", "s" if short else "d")
     b = HERE / "AgriDroneAI-dashboard-part.mp4"
     lst = dv.BUILD / "parts.txt"
     parts = []
@@ -57,11 +57,11 @@ def main(voice):
         subprocess.run(["ffmpeg", "-y", "-loglevel", "error", "-i", str(p), "-r", "20", "-s", "1280x720", "-c:v", "libx264", "-pix_fmt", "yuv420p", "-c:a", "aac", "-ar", "44100", "-ac", "1", str(q)], check=True)
         parts.append(q)
     lst.write_text("".join(f"file '{q}'\n" for q in parts))
-    out = HERE / "AgriDroneAI-for-everyone.mp4"
+    out = HERE / ("AgriDroneAI-short.mp4" if short else "AgriDroneAI-for-everyone.mp4")
     subprocess.run(["ffmpeg", "-y", "-loglevel", "error", "-f", "concat", "-safe", "0", "-i", str(lst), "-c", "copy", str(out)], check=True)
     b.unlink()
     print("wrote", out)
 
 
 if __name__ == "__main__":
-    main(sys.argv[sys.argv.index("--voice") + 1] if "--voice" in sys.argv else tts.VOICE)
+    main(sys.argv[sys.argv.index("--voice") + 1] if "--voice" in sys.argv else tts.VOICE, "--short" in sys.argv)
