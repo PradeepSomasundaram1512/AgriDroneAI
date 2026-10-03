@@ -27,7 +27,7 @@ def story(voice, short=False):
             wav = story_dir / f"s{i:02d}.wav"
             tts.synth(txt, wav, voice)
             d = float(subprocess.run(["ffprobe", "-v", "error", "-show_entries", "format=duration", "-of", "csv=p=0", str(wav)], capture_output=True, text=True).stdout)
-            durs.append(d + 0.7)
+            durs.append(d + 0.9)  # must equal the silence make_video.py appends after each scene, or audio drifts behind the picture
             wavs.append(wav)
         return durs, wavs
 
