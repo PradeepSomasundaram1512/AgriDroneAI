@@ -1,5 +1,10 @@
 # AgriDroneAI
 
+[![CI](https://github.com/PradeepSomasundaram1512/AgriDroneAI/actions/workflows/ci.yml/badge.svg)](https://github.com/PradeepSomasundaram1512/AgriDroneAI/actions/workflows/ci.yml)
+[![License: MIT](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
+![Python 3.11-3.13](https://img.shields.io/badge/python-3.11%20%7C%203.12%20%7C%203.13-blue)
+![Status: simulation-first](https://img.shields.io/badge/status-simulation--first-orange)
+
 Autonomous precision-agriculture drone network. **Simulation-first, self-operating, and honest about what is proven.**
 
 > **Honest result (v0.5):** in the simulator the AI keeps ~99% of the crop and uses ~80% less water than a fixed schedule, but a farmer who simply reacts to the same soil sensors does about as well on yield and profit. The drones' value shown here is automation and coverage, not better agronomy. See `scripts/robustness.py` and `agridrone economics`.
@@ -8,6 +13,13 @@ A scheduled GitHub Actions autopilot runs one operating cycle a day: read sensor
 plan multi-drone, multi-flight missions (own pads, 3D collision-checked, rechargeable batteries, wind-aware, no-fly detours) → safety-gate them → act → retrain on drift → audit.
 State is verified and committed to git, reports are published as issues, incidents open themselves, and a watchdog notices
 if the autopilot goes silent. No person (or Claude session) has to stay online.
+
+## Try it in 60 seconds
+```bash
+python -m venv .venv && .venv/bin/pip install -e ".[dev]"
+AGRIDRONE_OFFLINE=1 PYTHONPATH=. .venv/bin/python scripts/demo_season.py 120   # a full simulated season -> docs/dashboard_demo.html
+```
+Open `docs/dashboard_demo.html` in a browser: briefing, animated drone replay, time-lapse, safety, money view and the honest benchmark. No hardware, accounts or keys needed.
 
 | | |
 |---|---|
@@ -20,7 +32,7 @@ if the autopilot goes silent. No person (or Claude session) has to stay online.
 See [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md#benchmark) for the table and caveats. Reproduce with:
 ```bash
 python -m venv .venv && .venv/bin/pip install -e ".[dev]"
-PYTHONPATH=. .venv/bin/pytest -q --cov          # 110+ tests, gate at 85% coverage
+PYTHONPATH=. .venv/bin/pytest -q --cov          # 220+ tests, gate at 85% coverage
 PYTHONPATH=. .venv/bin/python scripts/benchmark.py 120 6
 PYTHONPATH=. .venv/bin/python scripts/eval_model.py      # stress model scored against the whole field
 PYTHONPATH=. .venv/bin/python scripts/eval_quality.py    # sensor-fault detector recall/false alarms
@@ -36,9 +48,9 @@ PYTHONPATH=. .venv/bin/python -m agridrone.cli cycle -n 30 && python -m agridron
 - **Simulated:** the farm itself (weather is synthetic or live from Open-Meteo), ground sensors and the crop (the satellite panel is real data of a real field, but there is no ground truth to score the classifier on). Yield/water/spray numbers are
   **simulator outputs, not field results**. A hardware pilot is required before any real-world claim.
 - **Not built:** real sprayer/valve driver (stub), cloud deployment (needs your credentials and spend),
-  regulatory approval, obstacle avoidance (trees, wires) and GNSS spoofing/jamming detection. Wind *physics* is validated by tests and the model, not in PX4 SITL (no wind source there); GPS loss is tested on real PX4 SITL.
+  regulatory approval, live obstacle sensing (obstacles and terrain are modelled in planning, but a drone does not detect new ones in flight) and GNSS spoofing/jamming detection. Wind *physics* is validated by tests and the model, not in PX4 SITL (no wind source there); GPS loss is tested on real PX4 SITL.
 
 Explainer videos for non-experts (rendered from the project's real data): `python video/make_video.py` (4 min animated explainer), `python video/make_layman_video.py` (story + dashboard tour, natural neural voice via `pip install edge-tts`; add `--short` for a 2-minute cut). Edit the narration in `video/script.py` / `video/story_script.py`. Narration is AI-generated.
 
-Docs: [Architecture](docs/ARCHITECTURE.md) · [Governance & incident response](docs/GOVERNANCE.md) · [Ground station](docs/GROUND_STATION.md) · [Changelog](CHANGELOG.md) · [Security](SECURITY.md)
+Docs: [Contributing](CONTRIBUTING.md) · [Architecture](docs/ARCHITECTURE.md) · [Governance & incident response](docs/GOVERNANCE.md) · [Ground station](docs/GROUND_STATION.md) · [Changelog](CHANGELOG.md) · [Security](SECURITY.md)
 Optional: add repo secret `ANTHROPIC_API_KEY` to enable the bounded Claude advisor (it can only nudge thresholds within hard limits).

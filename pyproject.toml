@@ -1,6 +1,8 @@
 [project]
 name = "agridrone"
 version = "0.5.0"
+license = "MIT"
+license-files = ["LICENSE"]
 description = "AgriDroneAI: autonomous precision-agriculture drone network (simulation-first)"
 requires-python = ">=3.11"
 dependencies = []
