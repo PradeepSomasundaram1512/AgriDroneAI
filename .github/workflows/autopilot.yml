@@ -16,8 +16,8 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with: {python-version: "3.13", cache: pip}
-      - name: Tests first (never operate on a broken build)
-        run: pip install pytest pytest-cov numpy rasterio && AGRIDRONE_OFFLINE=1 pytest -q --cov
+      - name: Smoke tests first (the full suite already ran in CI on this exact commit; this only guards the day's operation, ~10 s)
+        run: pip install pytest numpy && AGRIDRONE_OFFLINE=1 pytest -q tests/test_golden_cycle.py tests/test_core.py tests/test_config_verify.py tests/test_migration.py
       - name: Validate policy
         run: python -c "from agridrone.config import load_policy; load_policy(); print('policy OK')"
       - name: Operating cycle
