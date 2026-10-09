@@ -36,7 +36,7 @@ jobs:
           git add state docs/dashboard.html
           git diff --cached --quiet || git commit -m "autopilot: cycle $(date -u +%F)"
           git push || (git pull --rebase && git push)
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v6
         if: always()
         with: {name: dashboard, path: docs/dashboard.html, retention-days: 14}
       - name: Open incident issue on failure
