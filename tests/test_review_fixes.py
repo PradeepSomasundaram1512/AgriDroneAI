@@ -90,3 +90,23 @@ def test_hidden_physics_perturbations_change_outcomes_but_stay_deterministic():
         b.step(w)
         c.step(w)
     assert b.mean_yield() < a.mean_yield() and b.mean_yield() == c.mean_yield()
+
+
+def test_model_is_not_replaced_every_day_when_it_cannot_be_judged():
+    """Found on the live autopilot: with no stressed patches yet there are no held-out positives, accuracy is unknown, and the old logic called
+    that 'weak', retraining and promoting an unevaluated model EVERY cycle (version 14 after 14 days)."""
+    import copy
+    import tempfile
+
+    from agridrone import agent
+    from agridrone.config import load_policy
+    from agridrone.store import read_jsonl
+
+    pol = copy.deepcopy(load_policy())
+    pol["weather"]["source"] = "synthetic"
+    pol["field"]["sensor_fault_rate"] = 0.0
+    d = tempfile.mkdtemp()
+    for _ in range(10):
+        assert agent.run_cycle(pol, d)["ok"]
+    promoted = [a for a in read_jsonl("audit.jsonl", d) if a["kind"] == "retrain" and a.get("promoted")]
+    assert len(promoted) <= 5  # the first model plus a refresh every 3rd day, not one per cycle (it was 10 of 10)

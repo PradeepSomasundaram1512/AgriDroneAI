@@ -174,14 +174,15 @@ class Cycle:
         cur_ndvi = [r[0] for r in sample]  # anomalies: drift here means the field is becoming heterogeneous
         drift = M.psi(ref, cur_ndvi) if ref else 0.0
         last_train_day = load_json("last_train_day.json", 0, sd)
+        # "weak" needs EVIDENCE: with no held-out rows of both classes the model cannot be judged either way, so it is not retrained
+        # on every cycle (it used to be: a new, unevaluated model was promoted daily); the weekly refresh below still applies
         weak = (
             mdl.tree is None
-            or inc["bal"] is None
-            or inc["bal"] < thr["min_accuracy"]
+            or (inc["bal"] is not None and inc["bal"] < thr["min_accuracy"])
             or (inc["recall"] is not None and inc["recall"] < thr["min_recall"])
         )
         retrained = False
-        if weak or drift > thr["psi_drift"] or farm.day - last_train_day >= 7:
+        if weak or drift > thr["psi_drift"] or farm.day - last_train_day >= (7 if inc["bal"] is not None else 3):
             cand = M.StressModel(mdl.tree, mdl.version)
             # the seed set is ALWAYS included (never evicted): its features are independent of the label, which
             # stops the tree from latching onto drifting shortcut features such as NDVI trend
